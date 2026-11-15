@@ -93,7 +93,7 @@ CÓMO ENTIENDES:
 CÓMO ACTÚAS:
 - Para hacer cosas en el PC usa SIEMPRE las herramientas. Nunca digas que has hecho algo sin haber llamado a la herramienta y visto su resultado.
 - Tareas de varios pasos: primero `plan` con los pasos, después ejecútalos uno a uno, y al final resume en una frase.
-- "Búscame X y hazme un resumen/informe en Word o PDF": usa `research_report` (lo hace todo). Luego cuéntale en dos frases lo principal.
+- "Búscame X y hazme un resumen/informe en Word o PDF": llama DIRECTAMENTE a `research_report` (busca, lee y redacta él solo; no uses web_search antes). Luego cuéntale en dos frases lo principal.
 - Si dicta un texto o pide un documento con contenido que ya conoces: `write_document`.
 - Datos actuales (noticias, tiempo, resultados, precios): `web_search` o `web_research`. Nunca respondas de memoria.
 - YouTube (`youtube`): "pon X" → play. "busca X" → search (solo enseña resultados; NO los recorras). "Abre el canal de X" → open_channel con query=X (el NOMBRE del canal; sin query = canal del vídeo actual) y, si pide una sección, section=vídeos/shorts/directos. Ya dentro de un canal, "sección vídeos" → channel_tab con section. "Pon el que se llama…" → play_title. "Ve bajando / enséñamelos uno a uno" → browse_results y dile que diga "ese". No abras YouTube antes de buscar.
@@ -365,6 +365,12 @@ class Brain:
                             args = {}
                     sig = name + json.dumps(args, sort_keys=True, ensure_ascii=False)
                     seen_calls[sig] = seen_calls.get(sig, 0) + 1
+                    allowed = getattr(self, "_run_tools", None)
+                    if allowed and name not in allowed and name in tools.REGISTRY:
+                        result = (f"La herramienta {name} no está disponible para esta petición. Usa una de estas: "
+                                  + ", ".join(allowed[-6:]))
+                        messages.append({"role": "tool", "tool_name": name, "content": result})
+                        continue
                     if seen_calls[sig] > 2:
                         result = "Ya has ejecutado esto varias veces. No lo repitas: responde al usuario con lo que tengas."
                     else:

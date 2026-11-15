@@ -10,7 +10,7 @@ from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
 APP_NAME = "Jarvis"
-VERSION = "0.3.0"
+VERSION = "0.3.1"
 # Repositorio público de GitHub donde se publican las versiones ("usuario/repo").
 # Vacío = actualizaciones desactivadas.
 UPDATE_REPO = "Hidalgo611/jarvis-pablo"
@@ -38,9 +38,9 @@ DEFAULTS: dict = {
     "address": "Pablo",            # cómo le llama Jarvis
     "assistant_name": "Jarvis",
     "ollama_url": "http://127.0.0.1:11434",
-    "model": "qwen3.5:9b",         # cerebro principal: herramientas + visión (ve la pantalla)
+    "model": "qwen3.5:4b",         # cerebro principal: herramientas + visión; cabe entero en 8 GB de VRAM
     "vision_model": "",            # vacío = el mismo modelo (si el cerebro no tiene visión, poner uno que sí)
-    "num_ctx": 8192,
+    "num_ctx": 12288,
     "voice": "jarvis-clasico",
     "voice_speed": 1.0,
     "voice_fx": "sutil",          # sutil | robot | off
@@ -102,7 +102,15 @@ class Settings:
                 self.data["model"] = DEFAULTS["model"]
             if self.data.get("vision_model") == "qwen3.5:4b":
                 self.data["vision_model"] = ""
-        self.data["settings_version"] = 3
+        if v < 4:
+            # 0.3.1: el 9B no cabe entero en 8 GB (se iba en parte a la CPU) → 4B, más rápido y también con visión
+            if self.data.get("model") in ("qwen3.5:9b", "qwen3:8b"):
+                if self.data.get("model") == "qwen3.5:9b":
+                    self.data["cleanup_models"] = ["qwen3.5:9b"]
+                self.data["model"] = DEFAULTS["model"]
+            if self.data.get("num_ctx") == 8192:
+                self.data["num_ctx"] = DEFAULTS["num_ctx"]
+        self.data["settings_version"] = 4
 
     def __getitem__(self, k):
         return self.data.get(k, DEFAULTS.get(k))

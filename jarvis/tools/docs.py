@@ -103,7 +103,7 @@ def _pdf(title: str, content: str, path: Path) -> None:
     pdf.add_page()
     pdf.set_text_color(*ACCENT)
     pdf.set_font("UI", "B", 22)
-    pdf.multi_cell(0, 10, title)
+    pdf.multi_cell(0, 10, title, new_x="LMARGIN", new_y="NEXT")
     pdf.set_text_color(110, 110, 110)
     pdf.set_font("UI", "", 9)
     pdf.cell(0, 8, f"Preparado por J.A.R.V.I.S. · {time.strftime('%d/%m/%Y %H:%M')}", new_x="LMARGIN", new_y="NEXT")
@@ -114,12 +114,12 @@ def _pdf(title: str, content: str, path: Path) -> None:
             pdf.ln(3)
             pdf.set_text_color(*ACCENT)
             pdf.set_font("UI", "B", {"h1": 16, "h2": 14, "h3": 12}[kind])
-            pdf.multi_cell(0, 8, plain)
+            pdf.multi_cell(0, 8, plain, new_x="LMARGIN", new_y="NEXT")
         else:
             pdf.set_text_color(30, 30, 30)
             pdf.set_font("UI", "", 11)
             prefix = "•  " if kind == "bullet" else ""
-            pdf.multi_cell(0, 6, prefix + plain, markdown=False)
+            pdf.multi_cell(0, 6, prefix + plain, new_x="LMARGIN", new_y="NEXT")
             pdf.ln(1)
     pdf.output(str(path))
 

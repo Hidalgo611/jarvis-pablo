@@ -137,8 +137,10 @@ def _vram_mb() -> int:
 
 def pick_model() -> str:
     v = _vram_mb()
-    if v >= 7500:
+    if v >= 12000:
         return "qwen3.5:9b"
+    if v >= 7500:
+        return "qwen3.5:4b"
     if v >= 5000:
         return "qwen3.5:4b"
     return "qwen3.5:4b"
@@ -175,6 +177,16 @@ def ensure_llm() -> None:
     m = settings["model"]
     if m not in have and f"{m}:latest" not in have:
         pull(m, "cerebro (modelo de lenguaje)")
+    # borra modelos que Jarvis ya no usa (solo los que descargó él) para liberar disco
+    for old in settings.get("cleanup_models") or []:
+        if old != m:
+            try:
+                requests.delete(settings["ollama_url"] + "/api/delete", json={"model": old}, timeout=30)
+                log.info("modelo antiguo borrado: %s", old)
+            except Exception:
+                log.exception("borrar %s", old)
+    if settings.get("cleanup_models"):
+        settings.set("cleanup_models", [])
 
 
 def ensure_vision_background() -> None:

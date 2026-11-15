@@ -81,6 +81,10 @@ def select(text: str, recent: list[str] | None = None) -> list[str]:
         if _re.search(kw, low) or recent.intersection(group):
             names += group
     names += [n for n, t in REGISTRY.items() if not t.core]       # habilidades propias
+    # «búscame X y hazme un Word/PDF/informe»: solo la herramienta que lo hace todo (los modelos pequeños se lían)
+    if _re.search(r"(word|pdf|documento|informe)", low) and _re.search(r"(busca|b[uú]scame|investiga|noticias|inf[oó]rmate|"
+                                                                       r"qu[eé] (est[aá]|ha) pasa|sobre)", low):
+        names = [n for n in names if n not in ("web_search", "web_research", "write_document")]
     seen = set()
     return [n for n in names if n in REGISTRY and not (n in seen or seen.add(n))]
 
