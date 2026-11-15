@@ -21,7 +21,39 @@ log = logging.getLogger("tts")
 _SENT_RE = re.compile(r"(?<=[\.\!\?…;:])\s+|\n+")
 
 
+_U = ["cero", "una", "dos", "tres", "cuatro", "cinco", "seis", "siete", "ocho", "nueve", "diez", "once", "doce", "trece",
+      "catorce", "quince", "dieciséis", "diecisiete", "dieciocho", "diecinueve", "veinte", "veintiuno", "veintidós",
+      "veintitrés", "veinticuatro", "veinticinco", "veintiséis", "veintisiete", "veintiocho", "veintinueve"]
+_D = {3: "treinta", 4: "cuarenta", 5: "cincuenta"}
+
+
+def _num(n: int) -> str:
+    if n < 30:
+        return _U[n]
+    d, u = divmod(n, 10)
+    return _D[d] + ("" if u == 0 else " y " + ("un" if u == 1 else _U[u]))
+
+
+def _hora(m: re.Match) -> str:
+    h, mi = int(m.group(1)), int(m.group(2))
+    if h > 23 or mi > 59:
+        return m.group(0)
+    h12 = h % 12 or 12
+    franja = "del mediodía" if h == 12 else "de la mañana" if 6 <= h < 12 else ("de la tarde" if 13 <= h < 21 else "de la noche")
+    if mi == 0:
+        txt = f"{_num(h12)} en punto"
+    elif mi == 15:
+        txt = f"{_num(h12)} y cuarto"
+    elif mi == 30:
+        txt = f"{_num(h12)} y media"
+    else:
+        txt = f"{_num(h12)} y {_num(mi)}"
+    return txt + " " + franja
+
+
 def clean_for_speech(text: str) -> str:
+    text = re.sub(r"\b[Ee]s las\b", "Son las", text)
+    text = re.sub(r"\b(\d{1,2}):(\d{2})\b", _hora, text)
     t = re.sub(r"```.*?```", " ", text, flags=re.S)
     t = re.sub(r"https?://\S+", "el enlace", t)
     t = re.sub(r"[*_#`>|~]+", " ", t)
@@ -43,27 +75,31 @@ def split_sentences(text: str) -> list[str]:
     return out
 
 
-def jarvis_fx(x: np.ndarray, sr: int) -> np.ndarray:
-    """Timbre de IA sutil: desdoblamiento corto + brillo + pequeña sala."""
+def _room_ir(sr: int, seconds: float, decay: float) -> np.ndarray:
+    n = int(sr * seconds)
+    rng = np.random.default_rng(7)
+    ir = rng.standard_normal(n).astype(np.float32) * np.exp(-np.linspace(0, decay, n)).astype(np.float32)
+    return ir / np.abs(ir).sum()
+
+
+def jarvis_fx(x: np.ndarray, sr: int, mode: str = "sutil") -> np.ndarray:
+    """Timbre de IA. «sutil»: presencia + sala pequeña (natural). «robot»: el efecto antiguo, más metálico."""
     x = x.astype(np.float32)
     n = x.shape[0]
+    if mode in ("off", False, "no"):
+        return x
     y = x.copy()
-    for ms, g in ((9.0, 0.22), (15.0, 0.14)):
-        d = int(sr * ms / 1000)
-        if d < n:
-            y[d:] += g * x[:-d]
-    # brillo: realza agudos (pre-énfasis suave)
+    if mode == "robot":
+        for ms, g in ((9.0, 0.22), (15.0, 0.14)):
+            d = int(sr * ms / 1000)
+            if d < n:
+                y[d:] += g * x[:-d]
     hp = np.empty_like(y)
     hp[0] = y[0]
-    hp[1:] = y[1:] - 0.85 * y[:-1]
-    y = y + 0.18 * hp
-    # sala pequeña
-    ir_len = int(sr * 0.18)
-    rng = np.random.default_rng(7)
-    ir = rng.standard_normal(ir_len).astype(np.float32) * np.exp(-np.linspace(0, 7, ir_len)).astype(np.float32)
-    ir /= np.abs(ir).sum()
-    wet = np.convolve(y, ir)[:n]
-    y = y + 0.35 * wet
+    hp[1:] = y[1:] - 0.9 * y[:-1]
+    y = y + (0.18 if mode == "robot" else 0.08) * hp          # presencia / brillo
+    wet = np.convolve(y, _room_ir(sr, 0.22, 8))[:n]
+    y = y + (0.35 if mode == "robot" else 0.14) * wet         # sala de la «mansión»
     peak = float(np.abs(y).max() or 1.0)
     return (y / peak * 0.92).astype(np.float32)
 
@@ -95,19 +131,31 @@ class Speaker:
         threading.Thread(target=self._play_loop, name="tts-play", daemon=True).start()
 
     def load_voice(self, voice: str) -> bool:
-        d = voices.voice_dir(voice)
-        onnx = d / f"{voice}.onnx"
-        if not onnx.exists():
-            log.error("voz %s no instalada", voice)
+        d = voices.SUPERTONIC_DIR
+        if not voices.installed():
+            log.error("motor de voz no instalado")
             return False
-        cfg = so.OfflineTtsConfig(model=so.OfflineTtsModelConfig(
-            vits=so.OfflineTtsVitsModelConfig(model=str(onnx), tokens=str(d / "tokens.txt"),
-                                              data_dir=str(d / "espeak-ng-data")),
-            num_threads=3), max_num_sentences=1)
-        tts = so.OfflineTts(cfg)
-        self.tts, self.sr, self.voice_id = tts, tts.sample_rate, voice
-        log.info("voz cargada: %s (%d Hz)", voice, self.sr)
+        if self.tts is None:
+            cfg = so.OfflineTtsSupertonicModelConfig(
+                duration_predictor=str(d / "duration_predictor.int8.onnx"), text_encoder=str(d / "text_encoder.int8.onnx"),
+                vector_estimator=str(d / "vector_estimator.int8.onnx"), vocoder=str(d / "vocoder.int8.onnx"),
+                tts_json=str(d / "tts.json"), unicode_indexer=str(d / "unicode_indexer.bin"), voice_style=str(d / "voice.bin"))
+            self.tts = so.OfflineTts(so.OfflineTtsConfig(model=so.OfflineTtsModelConfig(supertonic=cfg, num_threads=4)))
+            self.sr = self.tts.sample_rate
+        if voice not in voices.CATALOG:
+            voice = voices.DEFAULT
+        self.voice_id = voice
+        log.info("voz cargada: %s (sid %d, %d Hz)", voice, voices.sid(voice), self.sr)
         return True
+
+    def synth(self, text: str) -> np.ndarray:
+        g = so.GenerationConfig()
+        g.sid = voices.sid(self.voice_id)
+        g.speed = float(settings["voice_speed"])
+        g.num_steps = 8
+        g.extra = {"lang": "es"}
+        a = self.tts.generate(text, g)
+        return np.asarray(a.samples, dtype=np.float32)
 
     # ---------- API ----------
     def say(self, text: str) -> None:
@@ -164,10 +212,9 @@ class Speaker:
                 self._done_one()
                 continue
             try:
-                a = self.tts.generate(text, sid=int(settings["voice_speaker"]), speed=float(settings["voice_speed"]))
-                x = np.asarray(a.samples, dtype=np.float32)
-                if settings["voice_fx"]:
-                    x = jarvis_fx(x, self.sr)
+                x = self.synth(text)
+                fx = settings["voice_fx"]
+                x = jarvis_fx(x, self.sr, "sutil" if fx is True else ("off" if fx is False else str(fx)))
                 x = np.concatenate([x, np.zeros(int(self.sr * 0.12), np.float32)])
                 self.audio_q.put((gen, x * float(settings["volume"]), text))
             except Exception:

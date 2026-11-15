@@ -292,6 +292,63 @@ class Browser:
         page.add_style_tag(content=HIGHLIGHT_CSS)
         self.browse = {"sel": sel, "i": 0, "every": every, "next": time.time() + 0.5, "title": "", "misses": 0}
 
+    # ---- música de fondo (presentación): pestaña aparte con la ventana minimizada ----
+    def _minimize(self, page) -> None:
+        try:
+            cdp = self.ctx.new_cdp_session(page)
+            wid = cdp.send("Browser.getWindowForTarget")["windowId"]
+            cdp.send("Browser.setWindowBounds", {"windowId": wid, "bounds": {"windowState": "minimized"}})
+        except Exception:
+            log.exception("minimizar")
+
+    def _music_start(self, url: str, search: str) -> bool:
+        prev = self._ensure()
+        page = self.ctx.new_page()
+        self.music = page
+        self.page = prev  # las órdenes normales siguen en la pestaña de siempre
+        self._minimize(page)
+        page.goto(url, wait_until="domcontentloaded", timeout=25000)
+        self._consent(page, wait=2.5)
+        try:
+            page.wait_for_selector("video", timeout=10000)
+        except Exception:
+            page.goto("https://www.youtube.com/results?search_query=" + urllib.parse.quote(search),
+                      wait_until="domcontentloaded", timeout=25000)
+            page.locator("a#video-title:visible, yt-lockup-view-model h3 a:visible").first.click(timeout=8000)
+            page.wait_for_selector("video", timeout=10000)
+        page.evaluate("() => { const v = document.querySelector('video'); if (v) { v.muted = false; v.volume = 1; v.play(); } }")
+        self._minimize(page)
+        return True
+
+    def _music_state(self) -> dict:
+        page = getattr(self, "music", None)
+        if page is None or page.is_closed():
+            return {}
+        st = page.evaluate("""() => { const v = document.querySelector('video'); const ad = !!document.querySelector('.ad-showing');
+            const mp = document.getElementById('movie_player');
+            const vol = (mp && mp.getVolume) ? mp.getVolume() / 100 : (v ? v.volume : 1);
+            return v ? {t: v.currentTime, playing: !v.paused, vol: vol, ad: ad} : {}; }""")
+        if st.get("ad"):  # anuncio: silencio y saltar en cuanto se pueda
+            page.evaluate("""() => { const v = document.querySelector('video'); if (v) v.muted = true;
+                const b = document.querySelector('.ytp-skip-ad-button, .ytp-ad-skip-button, .ytp-ad-skip-button-modern'); if (b) b.click(); }""")
+        else:
+            page.evaluate("() => { const v = document.querySelector('video'); if (v && v.muted) v.muted = false; }")
+        return st
+
+    def _music_volume(self, v: float) -> None:
+        page = getattr(self, "music", None)
+        if page is not None and not page.is_closed():
+            x = max(0.0, min(1.0, v))
+            page.evaluate(f"""() => {{ const mp = document.getElementById('movie_player');
+                if (mp && mp.setVolume) {{ mp.unMute && mp.unMute(); mp.setVolume({x * 100:.1f}); }}
+                const v = document.querySelector('video'); if (v) v.volume = {x:.3f}; }}""")
+
+    def _music_stop(self) -> None:
+        page = getattr(self, "music", None)
+        self.music = None
+        if page is not None and not page.is_closed():
+            page.close()
+
     def _select_highlighted(self) -> str:
         if not self.browse:
             return "No estoy recorriendo ninguna lista ahora mismo."
@@ -300,7 +357,7 @@ class Browser:
         el = page.locator(".jarvis-hl").first
         if not el.count():
             return "No hay ningún elemento resaltado."
-        link = el.locator("a#video-title, a#video-title-link, h3 a, a").first
+        link = el.locator("a#video-title, a#video-title-link, a.ytLockupMetadataViewModelTitle, h3 a, a[href*=watch]").first
         self._visible_click(page, link)
         page.wait_for_load_state("domcontentloaded", timeout=15000)
         time.sleep(1.5)
@@ -507,16 +564,115 @@ def _yt_key(key: str) -> str:
     return browser.call(f)
 
 
-@tool("youtube", "Controla YouTube en el navegador de Jarvis. play = buscar y reproducir directamente el mejor resultado (para 'pon X'). search = buscar y recorrer los resultados resaltándolos para que el usuario elija diciendo 'ese'. Además: recorrer resultados despacio resaltándolos (el usuario dirá cuál quiere), elegir el resaltado, reproducir el n-ésimo, pausa, pantalla completa, avanzar/retroceder segundos, calidad máxima, volumen, velocidad, subtítulos, siguiente vídeo, saltar anuncio.",
-      {"action": S("Acción", ["play", "search", "browse_results", "select_highlighted", "play_result", "play_pause", "fullscreen",
-                              "exit_fullscreen", "seek", "quality_max", "mute", "unmute", "speed", "captions", "next_video",
-                              "skip_ad", "what_is_playing"]),
-       "query": S("Búsqueda (para search)"),
-       "value": N("Segundos para seek (negativo = atrás), número de resultado para play_result, o velocidad (1.5)")},
-      ["action"], label=lambda a: {"search": f"Buscando en YouTube «{a.get('query', '')}»", "browse_results": "Recorriendo vídeos",
+YT_TITLE_LINKS = ("a#video-title:visible, a#video-title-link:visible, "
+                  "a.ytLockupMetadataViewModelTitle:visible, yt-lockup-view-model h3 a:visible, "
+                  "a.yt-lockup-metadata-view-model__title:visible")
+YT_CARDS_ALL = ("ytd-video-renderer, ytd-rich-item-renderer, ytd-grid-video-renderer, ytd-compact-video-renderer, "
+                "yt-lockup-view-model")
+CHANNEL_TABS = {"inicio": "featured", "principal": "featured", "videos": "videos", "vídeos": "videos", "shorts": "shorts",
+                "directos": "streams", "en vivo": "streams", "en directo": "streams", "streams": "streams",
+                "listas": "playlists", "playlists": "playlists", "listas de reproducción": "playlists",
+                "publicaciones": "posts", "comunidad": "posts", "podcasts": "podcasts", "acerca de": "about"}
+
+
+def _yt_titles(p, n: int = 8) -> list[str]:
+    try:
+        return [t.strip() for t in p.locator(YT_TITLE_LINKS).all_inner_texts()[:n] if t.strip()]
+    except Exception:
+        return []
+
+
+def _channel_base(p) -> str | None:
+    m = re.match(r"(https://www\.youtube\.com/(?:@[^/?#]+|channel/[^/?#]+|c/[^/?#]+|user/[^/?#]+))", p.url)
+    if m:
+        return m.group(1)
+    try:  # en un vídeo: el enlace del canal del autor
+        href = p.locator("ytd-video-owner-renderer a[href]").first.get_attribute("href", timeout=3000)
+        if href:
+            return "https://www.youtube.com" + href.split("?")[0].rstrip("/").removesuffix("/videos")
+    except Exception:
+        pass
+    return None
+
+
+def _open_channel(name: str | None) -> str:
+    p = _yt_page()
+    browser.browse = None
+    if not name:
+        base = _channel_base(p)
+        if not base:
+            return "No estoy en ningún vídeo ni canal; dime de qué canal se trata."
+        p = browser._goto(base)
+        return f"Canal abierto: {p.title()}"
+    browser._goto("https://www.youtube.com/results?search_query=" + urllib.parse.quote(name) + "&sp=EgIQAg%253D%253D")
+    p = browser.page
+    try:
+        p.wait_for_selector("ytd-channel-renderer", timeout=10000)
+        link = p.locator("ytd-channel-renderer a#main-link, ytd-channel-renderer a.channel-link").first
+        browser._visible_click(p, link)
+        p.wait_for_url(re.compile(r"/(@|channel/|c/|user/)"), timeout=10000)
+    except Exception:
+        p = browser._goto("https://www.youtube.com/@" + re.sub(r"\s+", "", name))
+    time.sleep(1.2)
+    return f"Canal abierto: {p.title()} ({p.url}). Pestañas: inicio, vídeos, shorts, directos, listas."
+
+
+def _channel_tab(tab: str) -> str:
+    p = _yt_page()
+    browser.browse = None
+    key = (tab or "videos").lower().strip()
+    slug = CHANNEL_TABS.get(key) or next((v for k, v in CHANNEL_TABS.items() if k in key), "videos")
+    base = _channel_base(p)
+    if not base:
+        return "No estoy en ningún canal. Primero abre el canal (action=open_channel)."
+    p = browser._goto(base + "/" + slug)
+    time.sleep(1.5)
+    tl = _yt_titles(p, 6)
+    return f"Sección «{tab}» abierta en {p.title()}." + ("\nPrimeros: " + " | ".join(tl) if tl else "")
+
+
+def _play_title(text: str) -> str:
+    import difflib
+    p = _yt_page()
+    browser.browse = None
+    links = p.locator(YT_TITLE_LINKS)
+    best, score = None, 0.0
+    q = text.lower()
+    words = re.findall(r"\w{4,}", q)
+    for i in range(min(links.count(), 40)):
+        t = (links.nth(i).inner_text() or "").strip().lower()
+        if not t:
+            continue
+        sc = difflib.SequenceMatcher(None, q, t).ratio() + (0.5 if q in t else 0) + 0.15 * sum(w in t for w in words)
+        if sc > score:
+            best, score = i, sc
+    if best is None or score < 0.45:
+        return f"No veo ningún vídeo que se parezca a «{text}» en esta página."
+    browser._visible_click(p, links.nth(best))
+    p.wait_for_load_state("domcontentloaded", timeout=15000)
+    time.sleep(1.5)
+    return f"Reproduciendo: {p.title()}"
+
+
+@tool("youtube", "Controla YouTube en el navegador de Jarvis. "
+      "play = buscar y reproducir el mejor resultado ('pon X'). search = buscar y enseñar resultados (NO los recorre). "
+      "browse_results = recorrer despacio los vídeos de la página resaltándolos para que el usuario diga 'ese' (solo si lo pide: 've bajando', 'enséñamelos uno a uno'). "
+      "open_channel = abrir un CANAL (query = nombre; sin query, el canal del vídeo actual). "
+      "channel_tab = abrir una sección del canal: inicio, vídeos, shorts, directos, listas (query = sección). "
+      "play_title = reproducir el vídeo de esta página cuyo título se parezca a query. play_result = el n-ésimo. "
+      "Además: pausa, pantalla completa, avanzar/retroceder segundos, calidad máxima, silenciar, velocidad, subtítulos, siguiente, saltar anuncio.",
+      {"action": S("Acción", ["play", "search", "open_channel", "channel_tab", "play_title", "play_result", "browse_results",
+                              "select_highlighted", "play_pause", "fullscreen", "exit_fullscreen", "seek", "quality_max",
+                              "mute", "unmute", "speed", "captions", "next_video", "skip_ad", "what_is_playing"]),
+       "query": S("Búsqueda, NOMBRE del canal (open_channel) o parte del título (play_title)"),
+       "section": S("Sección del canal: inicio, vídeos, shorts, directos, listas (para open_channel o channel_tab)"),
+       "value": N("Segundos para seek (negativo = atrás), número para play_result, o velocidad (1.5)")},
+      ["action"], label=lambda a: {"search": f"Buscando en YouTube «{a.get('query', '')}»", "play": f"Poniendo «{a.get('query', '')}»",
+                                   "browse_results": "Recorriendo vídeos", "open_channel": f"Abriendo el canal {a.get('query') or ''}",
+                                   "channel_tab": f"Sección {a.get('query', '')}", "play_title": f"Poniendo «{a.get('query', '')}»",
                                    "select_highlighted": "Abriendo el vídeo elegido", "quality_max": "Calidad máxima",
                                    "fullscreen": "Pantalla completa", "seek": "Moviendo el vídeo"}.get(a.get("action"), "Controlando YouTube"))
-def youtube(action: str, query: str | None = None, value: float | None = None) -> str:
+def youtube(action: str, query: str | None = None, value: float | None = None, section: str | None = None) -> str:
     b = browser
     if action in ("search", "play"):
         q = query or ""
@@ -525,23 +681,31 @@ def youtube(action: str, query: str | None = None, value: float | None = None) -
 
         def titles():
             p = b.page
-            p.wait_for_selector("ytd-video-renderer", timeout=12000)
-            ts = p.locator("ytd-video-renderer #video-title").all_inner_texts()[:6]
-            return "\n".join(f"{i + 1}. {t.strip()}" for i, t in enumerate(ts))
+            p.wait_for_selector("ytd-video-renderer, yt-lockup-view-model", timeout=12000)
+            return "\n".join(f"{i + 1}. {t}" for i, t in enumerate(_yt_titles(p, 6)))
         try:
             lst = b.call(titles)
         except Exception:
             return r
         if action == "play":
             return youtube("play_result", value=1) + "\nOtros resultados:\n" + lst
-        b.call(lambda: b._start_browse("ytd-video-renderer", every=2.8))
-        return ("Resultados (los estoy recorriendo y resaltando en pantalla uno a uno; dile que diga «ese» "
-                "cuando vea el que quiere):\n" + lst)
+        return ("Resultados en pantalla (no los recorras salvo que lo pida; puede decir el título, un número, "
+                "o pedir el canal):\n" + lst)
+    if action == "open_channel":
+        if query and query.lower().strip() in CHANNEL_TABS and not section:
+            return b.call(_channel_tab, query, timeout=60)  # «abre la sección vídeos» mal etiquetado
+        r = b.call(_open_channel, query, timeout=60)
+        if section:
+            r += "\n" + b.call(_channel_tab, section, timeout=60)
+        return r
+    if action == "channel_tab":
+        return b.call(_channel_tab, section or query or "videos", timeout=60)
+    if action == "play_title":
+        return b.call(_play_title, query or "", timeout=60)
     if action == "browse_results":
         def start():
-            p = _yt_page()
-            sel = "ytd-video-renderer" if "/results" in p.url else YT_CARDS
-            b._start_browse(sel, every=2.8)
+            _yt_page()
+            b._start_browse(YT_CARDS_ALL, every=2.8)
             return "Recorriendo los vídeos uno a uno y resaltándolos. Cuando el usuario diga 'ese', usa select_highlighted."
         return b.call(start)
     if action == "select_highlighted":
@@ -552,8 +716,7 @@ def youtube(action: str, query: str | None = None, value: float | None = None) -
         def play():
             p = _yt_page()
             b.browse = None
-            el = p.locator("ytd-video-renderer a#video-title, ytd-rich-item-renderer a#video-title-link").nth(n - 1)
-            b._visible_click(p, el)
+            b._visible_click(p, p.locator(YT_TITLE_LINKS).nth(n - 1))
             p.wait_for_load_state("domcontentloaded", timeout=15000)
             time.sleep(1.5)
             return f"Reproduciendo: {p.title()}"

@@ -1,4 +1,12 @@
-"""Interfaz superpuesta: pantalla oscurecida, núcleo palpitante, panel en la esquina y anillo del ratón."""
+"""Interfaz superpuesta de J.A.R.V.I.S.
+
+Modos: hidden | focus (pantalla oscurecida + núcleo grande) | corner (núcleo en la esquina + panel) |
+setup (instalación) | intro (presentación cinematográfica del primer arranque).
+
+Rendimiento: solo se redibuja la zona que cambia (núcleo, textos, panel, ratón); el fondo completo
+solo mientras cambia el oscurecido. Los elementos fijos (rejilla hexagonal, anillo de texto) se
+pre-renderizan en QPixmap.
+"""
 from __future__ import annotations
 
 import ctypes
@@ -6,22 +14,24 @@ import math
 import random
 import time
 
+import psutil
 from PySide6.QtCore import QPointF, QRect, QRectF, Qt, QTimer
 from PySide6.QtGui import (QBrush, QColor, QCursor, QFont, QFontMetrics, QGuiApplication, QPainter, QPainterPath, QPen,
-                           QRadialGradient)
+                           QPixmap, QRadialGradient)
 from PySide6.QtWidgets import QWidget
 
 from ..bus import bus
-from ..config import settings
+from ..config import VERSION, settings
 
 CYAN = QColor(64, 210, 255)
-AMBER = QColor(255, 186, 72)
+AMBER = QColor(255, 176, 60)
 RED = QColor(255, 80, 80)
 WHITE = QColor(235, 250, 255)
 STATE_COLOR = {"listening": CYAN, "thinking": AMBER, "acting": QColor(90, 180, 255), "speaking": QColor(120, 230, 255),
-               "setup": CYAN, "idle": CYAN, "error": RED}
-STATE_TEXT = {"listening": "Le escucho", "thinking": "Procesando", "acting": "Trabajando", "speaking": "",
-              "setup": "Iniciando sistemas", "idle": "", "error": "Error"}
+               "setup": CYAN, "idle": CYAN, "error": RED, "intro": CYAN}
+STATE_LABEL = {"listening": "ESCUCHANDO", "thinking": "PROCESANDO", "acting": "EN CURSO", "speaking": "HABLANDO",
+               "setup": "INSTALANDO", "error": "ERROR", "idle": "EN ESPERA", "intro": "INICIANDO"}
+RING_TEXT = "JUST A RATHER VERY INTELLIGENT SYSTEM  ·  J.A.R.V.I.S.  ·  STARK INDUSTRIES  ·  "
 
 GWL_EXSTYLE = -20
 WS_EX_LAYERED, WS_EX_TRANSPARENT, WS_EX_TOOLWINDOW, WS_EX_NOACTIVATE, WS_EX_TOPMOST = 0x80000, 0x20, 0x80, 0x8000000, 0x8
@@ -62,7 +72,8 @@ class Overlay(QWidget):
         self.alpha_t = 0.0
         self.level = 0.0
         self.level_raw = 0.0
-        self.rot = [0.0, 0.0, 0.0]
+        self.bars = [0.0] * 72
+        self.rot = [0.0, 0.0, 0.0, 0.0]
         self.t0 = time.time()
         self.status = ""
         self.subtitle = ""
@@ -76,17 +87,30 @@ class Overlay(QWidget):
         self.mouse_trail: list[tuple[float, float, float]] = []
         self.mouse_target: QPointF | None = None
         self.edge = 0.0
-        self.particles = [(random.uniform(0, 6.283), random.uniform(1.05, 1.6), random.uniform(0.2, 0.9),
-                           random.uniform(1.0, 2.6)) for _ in range(46)]
+        self.shock = -1.0            # onda expansiva al activarse (0..1)
+        self.intro_t0 = 0.0
+        self.intro_lines: list[tuple[float, str]] = []
+        self.intro_title = 0.0
+        self.particles = [(random.uniform(0, 6.283), random.uniform(1.05, 1.75), random.uniform(0.2, 0.9),
+                           random.uniform(1.0, 2.6)) for _ in range(54)]
+        self.telemetry = ("", "", "")
+        self._tele_ts = 0.0
         self._full_dirty = True
         self._last_topmost = 0.0
+        self._ring_pm: QPixmap | None = None
+        self._ring_r = 0
+        self._hex_pm: QPixmap | None = None
 
         self.f_title = QFont("Segoe UI", 15, QFont.DemiBold)
         self.f_title.setLetterSpacing(QFont.AbsoluteSpacing, 7)
+        self.f_big = QFont("Segoe UI Light", 44)
+        self.f_big.setLetterSpacing(QFont.AbsoluteSpacing, 22)
         self.f_status = QFont("Segoe UI", 12)
         self.f_status.setLetterSpacing(QFont.AbsoluteSpacing, 2)
         self.f_sub = QFont("Segoe UI", 17)
         self.f_small = QFont("Segoe UI", 10)
+        self.f_mono = QFont("Consolas", 10)
+        self.f_mono.setLetterSpacing(QFont.AbsoluteSpacing, 1.5)
         self.f_panel_t = QFont("Segoe UI", 10, QFont.DemiBold)
         self.f_panel_t.setLetterSpacing(QFont.AbsoluteSpacing, 4)
         self.f_mouse = QFont("Segoe UI", 8, QFont.DemiBold)
@@ -103,6 +127,7 @@ class Overlay(QWidget):
         bus.progress.connect(self.set_progress)
         bus.mouse.connect(self.set_mouse)
         bus.mouse_target.connect(self.set_mouse_target)
+        bus.intro.connect(self.set_intro)
 
         self.timer = QTimer(self)
         self.timer.timeout.connect(self.tick)
@@ -122,30 +147,34 @@ class Overlay(QWidget):
 
     # ------------------------------------------------------------------ slots
     def corner_center(self) -> QPointF:
-        m = 78
+        m = 82
         c = settings["corner"]
         x = self.width() - m if "right" in c else m
         y = m if "top" in c else self.height() - m
         return QPointF(x, y)
 
     def set_mode(self, mode: str) -> None:
+        prev = self.mode
         self.mode = mode
         W, H = self.width(), self.height()
+        big = min(W, H) * 0.12
         if mode == "focus":
             self.dim_target = float(settings["dim_opacity"])
             self.pos_t = QPointF(W / 2, H / 2 - 40)
-            self.r_t = min(W, H) * 0.12
+            self.r_t = big
             self.alpha_t = 1.0
             self.plan, self.plan_state = [], {}
-        elif mode == "setup":
-            self.dim_target = 0.92
+            if prev in ("hidden", "corner"):
+                self.shock = 0.0
+        elif mode in ("setup", "intro"):
+            self.dim_target = 1.0 if mode == "intro" else 0.94
             self.pos_t = QPointF(W / 2, H / 2 - 40)
-            self.r_t = min(W, H) * 0.12
+            self.r_t = big * (1.15 if mode == "intro" else 1.0)
             self.alpha_t = 1.0
         elif mode == "corner":
             self.dim_target = 0.0
             self.pos_t = self.corner_center()
-            self.r_t = 44
+            self.r_t = 46
             self.alpha_t = 1.0
         else:  # hidden
             self.dim_target = 0.0
@@ -154,8 +183,22 @@ class Overlay(QWidget):
         if mode != "hidden" and not self.isVisible():
             if self.alpha < 0.05:
                 self.pos_c = QPointF(self.pos_t)
-                self.r = self.r_t * 0.3
+                self.r = self.r_t * (0.05 if mode == "intro" else 0.3)
             self.show()
+        self._full_dirty = True
+
+    def set_intro(self, phase: str) -> None:
+        if phase == "start":
+            self.intro_t0 = time.time()
+            self.intro_lines = []
+            self.intro_title = 0.0
+            self.set_mode("intro")
+            self.state = "intro"
+        elif phase.startswith("line:"):
+            self.intro_lines.append((time.time(), phase[5:]))
+            self.intro_lines = self.intro_lines[-9:]
+        elif phase == "title":
+            self.intro_title = time.time()
         self._full_dirty = True
 
     def set_state(self, s: str) -> None:
@@ -200,18 +243,30 @@ class Overlay(QWidget):
     # ------------------------------------------------------------------ animación
     def tick(self) -> None:
         now = time.time()
-        k = 0.12
-        self.dim = _lerp(self.dim, self.dim_target, 0.10)
+        k = 0.11
+        self.dim = _lerp(self.dim, self.dim_target, 0.09)
         self.alpha = _lerp(self.alpha, self.alpha_t, 0.12)
         self.pos_c = QPointF(_lerp(self.pos_c.x(), self.pos_t.x(), k), _lerp(self.pos_c.y(), self.pos_t.y(), k))
-        self.r = _lerp(self.r, self.r_t, k)
+        rk = 0.035 if self.mode == "intro" else k
+        self.r = _lerp(self.r, self.r_t, rk)
         self.level = _lerp(self.level, self.level_raw, 0.35 if self.level_raw > self.level else 0.08)
+        # ecualizador circular: cada barra sigue al nivel con su propio ruido
+        t = now - self.t0
+        for i in range(len(self.bars)):
+            target = self.level * (0.45 + 0.55 * abs(math.sin(i * 1.7 + t * 9.0 + math.sin(i * 0.37 + t * 3))))
+            self.bars[i] = _lerp(self.bars[i], target, 0.4 if target > self.bars[i] else 0.12)
         target_c = STATE_COLOR.get(self.state, CYAN)
         self.color = _mix(self.color, target_c, 0.08)
-        speed = {"thinking": 2.6, "acting": 1.8, "setup": 1.5}.get(self.state, 1.0)
+        speed = {"thinking": 2.8, "acting": 1.8, "setup": 1.5, "intro": 1.3}.get(self.state, 1.0)
         self.rot[0] += 0.25 * speed
         self.rot[1] -= 0.55 * speed
         self.rot[2] += 0.9 * speed
+        self.rot[3] += 0.12 * speed
+        if self.shock >= 0:
+            self.shock += 0.022
+            if self.shock > 1:
+                self.shock = -1.0
+            self._full_dirty = True
         acting = self.mode == "corner" and self.state in ("acting", "thinking")
         edge_t = 1.0 if (acting or self.mouse_on) else 0.0
         edge_changing = abs(self.edge - edge_t) > 0.01
@@ -220,7 +275,14 @@ class Overlay(QWidget):
             p = QCursor.pos()
             g = self.geometry()
             self.mouse_trail.append((p.x() - g.x(), p.y() - g.y(), now))
-        self.mouse_trail = [t for t in self.mouse_trail if now - t[2] < 0.5]
+        self.mouse_trail = [m for m in self.mouse_trail if now - m[2] < 0.5]
+        if self.mode in ("focus", "intro") and now - self._tele_ts > 1.0:
+            self._tele_ts = now
+            try:
+                self.telemetry = (time.strftime("%H:%M:%S"), f"CPU {psutil.cpu_percent():4.0f}%",
+                                  f"RAM {psutil.virtual_memory().percent:4.0f}%")
+            except Exception:
+                pass
         if self.mode == "hidden" and self.alpha < 0.02 and self.dim < 0.01 and self.isVisible():
             self.hide()
             return
@@ -230,23 +292,95 @@ class Overlay(QWidget):
             self._last_topmost = now
             ctypes.windll.user32.SetWindowPos(int(self.winId()), HWND_TOPMOST, 0, 0, 0, 0, SWP_FLAGS)
         dim_changing = abs(self.dim - self.dim_target) > 0.003
-        if dim_changing or edge_changing or self._full_dirty:
+        if dim_changing or edge_changing or self._full_dirty or self.mode == "intro":
             self._full_dirty = dim_changing or edge_changing
             self.update()
         else:
             self.update(self._dirty_rect())
 
     def _dirty_rect(self) -> QRect:
-        R = self.r * 2.6 + 40
+        R = self.r * 2.7 + 50
         rect = QRectF(self.pos_c.x() - R, self.pos_c.y() - R, 2 * R, 2 * R)
         rect = rect.united(self._panel_rect())
         if self.mode in ("focus", "setup"):
             rect = rect.united(QRectF(0, self.pos_c.y() + self.r, self.width(), self.r * 0.6 + 320))
+            rect = rect.united(self._tele_rect())
         for x, y, _ in self.mouse_trail:
             rect = rect.united(QRectF(x - 60, y - 60, 120, 120))
         if self.mouse_target:
             rect = rect.united(QRectF(self.mouse_target.x() - 60, self.mouse_target.y() - 60, 120, 120))
         return rect.toAlignedRect().adjusted(-4, -4, 4, 4)
+
+    # ------------------------------------------------------------------ recursos pre-renderizados
+    def _hex(self) -> QPixmap:
+        if self._hex_pm is None or self._hex_pm.size() != self.size():
+            pm = QPixmap(self.size())
+            pm.fill(Qt.transparent)
+            p = QPainter(pm)
+            p.setRenderHint(QPainter.Antialiasing)
+            s = 34.0
+            rho = s / 2
+            dx, dy = math.sqrt(3) * rho, 1.5 * rho
+            cx, cy = self.width() / 2, self.height() / 2
+            maxd = math.hypot(cx, cy)
+            y = 0.0
+            row = 0
+            while y < self.height() + s:
+                x = -s + (dx / 2 if row % 2 else 0)
+                while x < self.width() + s:
+                    d = math.hypot(x - cx, y - cy) / maxd
+                    a = int(max(0, 26 * (1 - d * 1.25)))
+                    if a > 2:
+                        p.setPen(QPen(QColor(64, 210, 255, a), 1))
+                        path = QPainterPath()
+                        for k in range(7):
+                            ang = math.radians(60 * k + 30)
+                            pt = QPointF(x + s / 2 * math.cos(ang), y + s / 2 * math.sin(ang))
+                            path.lineTo(pt) if k else path.moveTo(pt)
+                        p.drawPath(path)
+                    x += dx
+                y += dy
+                row += 1
+            p.end()
+            self._hex_pm = pm
+        return self._hex_pm
+
+    def _ring(self, R: float) -> QPixmap | None:
+        r = int(R * 1.34)
+        if r < 60:
+            return None
+        if self._ring_pm is None or abs(self._ring_r - r) > 2:
+            if abs(self.r - self.r_t) > 1.5:  # aún animando el tamaño: no regenerar cada fotograma
+                return self._ring_pm if self._ring_pm is not None else None
+            size = 2 * r + 40
+            pm = QPixmap(size, size)
+            pm.fill(Qt.transparent)
+            p = QPainter(pm)
+            p.setRenderHint(QPainter.Antialiasing)
+            p.setRenderHint(QPainter.TextAntialiasing)
+            f = QFont("Segoe UI", max(7, int(r / 26)), QFont.DemiBold)
+            p.setFont(f)
+            fm = QFontMetrics(f)
+            p.setPen(QColor(64, 210, 255, 150))
+            text = RING_TEXT
+            circ = 2 * math.pi * r
+            tw = fm.horizontalAdvance(text)
+            reps = max(1, int(circ / tw))
+            text = text * reps
+            ang = 0.0
+            c = size / 2
+            for ch in text:
+                w = fm.horizontalAdvance(ch)
+                a = ang + (w / 2) / r
+                p.save()
+                p.translate(c + r * math.cos(a), c + r * math.sin(a))
+                p.rotate(math.degrees(a) + 90)
+                p.drawText(QPointF(-w / 2, 0), ch)
+                p.restore()
+                ang += (w / r) * (circ / (tw * reps))
+            p.end()
+            self._ring_pm, self._ring_r = pm, r
+        return self._ring_pm
 
     # ------------------------------------------------------------------ pintura
     def paintEvent(self, e) -> None:  # noqa: N802
@@ -257,18 +391,27 @@ class Overlay(QWidget):
         p.setCompositionMode(QPainter.CompositionMode_SourceOver)
         if self.dim > 0.004:
             p.fillRect(self.rect(), QColor(0, 3, 8, int(self.dim * 255)))
+            if self.mode in ("focus", "intro", "setup"):
+                p.setOpacity(min(1.0, self.dim * 1.1))
+                p.drawPixmap(0, 0, self._hex())
+                p.setOpacity(1.0)
             g = QRadialGradient(self.pos_c, max(self.width(), self.height()) * 0.55)
             c = QColor(self.color)
-            c.setAlpha(int(34 * self.dim))
+            c.setAlpha(int(40 * self.dim))
             g.setColorAt(0, c)
             g.setColorAt(1, QColor(0, 0, 0, 0))
             p.fillRect(self.rect(), QBrush(g))
         if self.edge > 0.01:
             self._paint_edge(p)
+        if self.shock >= 0:
+            self._paint_shock(p)
         if self.alpha > 0.01:
             self._paint_core(p)
             if self.mode in ("focus", "setup"):
                 self._paint_focus_text(p)
+                self._paint_telemetry(p)
+            elif self.mode == "intro":
+                self._paint_intro(p)
             elif self.mode == "corner":
                 self._paint_panel(p)
         if self.mouse_on or self.mouse_trail:
@@ -280,23 +423,56 @@ class Overlay(QWidget):
         c.setAlphaF(max(0.0, min(1.0, a * self.alpha)))
         return c
 
+    def _paint_shock(self, p: QPainter) -> None:
+        s = self.shock
+        rad = self.r_t * (0.6 + 5.0 * s)
+        p.setBrush(Qt.NoBrush)
+        p.setPen(QPen(self._col(0.6 * (1 - s), CYAN), 3 * (1 - s) + 1))
+        p.drawEllipse(self.pos_t, rad, rad)
+        p.setPen(QPen(self._col(0.3 * (1 - s), CYAN), 1))
+        p.drawEllipse(self.pos_t, rad * 0.85, rad * 0.85)
+
     def _paint_core(self, p: QPainter) -> None:
         c, R = self.pos_c, self.r
         t = time.time() - self.t0
         breath = 0.5 + 0.5 * math.sin(t * (3.2 if self.state == "listening" else 2.0))
         lv = self.level
+        big = R > 70
         # halo
-        g = QRadialGradient(c, R * 2.4)
+        g = QRadialGradient(c, R * 2.5)
         g.setColorAt(0, self._col(0.30 + 0.25 * lv))
         g.setColorAt(0.45, self._col(0.10 + 0.10 * lv))
         g.setColorAt(1, self._col(0))
         p.setPen(Qt.NoPen)
         p.setBrush(g)
-        p.drawEllipse(c, R * 2.4, R * 2.4)
+        p.drawEllipse(c, R * 2.5, R * 2.5)
+        # anillo de texto giratorio
+        if big:
+            pm = self._ring(R)
+            if pm is not None:
+                p.save()
+                p.translate(c)
+                p.rotate(-self.rot[3])
+                p.setOpacity(0.85 * self.alpha)
+                p.drawPixmap(QPointF(-pm.width() / 2, -pm.height() / 2), pm)
+                p.setOpacity(1.0)
+                p.restore()
+        # ecualizador circular (voz)
+        n = len(self.bars)
+        rb = R * 1.08
+        p.save()
+        p.translate(c)
+        for i, b in enumerate(self.bars):
+            a = math.radians(i * 360 / n + self.rot[0] * 0.2)
+            ln = 2 + b * R * 0.42
+            p.setPen(QPen(self._col(0.35 + 0.6 * b), max(1.5, R / 55), Qt.SolidLine, Qt.RoundCap))
+            p.drawLine(QPointF(math.cos(a) * rb, math.sin(a) * rb), QPointF(math.cos(a) * (rb + ln), math.sin(a) * (rb + ln)))
+        p.restore()
         # partículas en órbita
         for i, (ang, rr, sp, sz) in enumerate(self.particles):
             a = ang + t * sp * (1.6 if self.state == "thinking" else 0.6) * (1 if i % 2 else -1)
             rad = R * (rr + 0.08 * math.sin(t * 2 + i))
+            p.setPen(Qt.NoPen)
             p.setBrush(self._col(0.25 + 0.5 * ((math.sin(t * 3 + i) + 1) / 2)))
             p.drawEllipse(QPointF(c.x() + math.cos(a) * rad, c.y() + math.sin(a) * rad), sz * R / 110 + 0.6, sz * R / 110 + 0.6)
         # anillo exterior con marcas
@@ -310,9 +486,19 @@ class Overlay(QWidget):
             ln = R * (0.075 if i % 6 == 0 else 0.035)
             p.setPen(QPen(self._col(0.75 if i % 6 == 0 else 0.4), max(1.0, R / 90)))
             ang = math.radians(i * 5)
-            p.drawLine(QPointF(math.cos(ang) * (R + 4), math.sin(ang) * (R + 4)),
-                       QPointF(math.cos(ang) * (R + 4 + ln), math.sin(ang) * (R + 4 + ln)))
+            p.drawLine(QPointF(math.cos(ang) * (R - 2), math.sin(ang) * (R - 2)),
+                       QPointF(math.cos(ang) * (R - 2 - ln), math.sin(ang) * (R - 2 - ln)))
         p.restore()
+        # barrido de radar al pensar
+        if self.state in ("thinking", "acting", "setup", "intro"):
+            p.save()
+            p.translate(c)
+            p.rotate(self.rot[2] * 2.2)
+            for k in range(14):
+                p.setPen(Qt.NoPen)
+                p.setBrush(self._col(0.10 * (1 - k / 14)))
+                p.drawPie(QRectF(-R * 0.95, -R * 0.95, R * 1.9, R * 1.9), int(-k * 3 * 16), int(-3 * 16))
+            p.restore()
         # arcos medios
         p.save()
         p.translate(c)
@@ -324,6 +510,9 @@ class Overlay(QWidget):
         p.setPen(QPen(self._col(0.35), max(1.0, R / 60), Qt.SolidLine, Qt.FlatCap))
         for k in range(3):
             p.drawArc(QRectF(-rr, -rr, 2 * rr, 2 * rr), int((k * 120 + 75) * 16), int(30 * 16))
+        # acento naranja (detalle Stark)
+        p.setPen(QPen(self._col(0.8, AMBER), max(1.5, R / 45), Qt.SolidLine, Qt.FlatCap))
+        p.drawArc(QRectF(-rr * 1.12, -rr * 1.12, 2.24 * rr, 2.24 * rr), int(200 * 16), int(26 * 16))
         p.restore()
         # anillo interior discontinuo
         p.save()
@@ -333,8 +522,20 @@ class Overlay(QWidget):
         pen = QPen(self._col(0.6), max(1.0, R / 55))
         pen.setDashPattern([2, 4])
         p.setPen(pen)
+        p.setBrush(Qt.NoBrush)
         p.drawEllipse(QPointF(0, 0), r3, r3)
         p.restore()
+        # corchetes HUD
+        if big:
+            p.save()
+            p.translate(c)
+            p.setPen(QPen(self._col(0.55), 1.5))
+            s = R * 1.62
+            L = R * 0.22
+            for sx, sy in ((-1, -1), (1, -1), (1, 1), (-1, 1)):
+                p.drawLine(QPointF(sx * s, sy * s), QPointF(sx * (s - L), sy * s))
+                p.drawLine(QPointF(sx * s, sy * s), QPointF(sx * s, sy * (s - L)))
+            p.restore()
         # segmentos del reactor
         p.save()
         p.translate(c)
@@ -362,14 +563,13 @@ class Overlay(QWidget):
         p.setBrush(g2)
         p.setPen(Qt.NoPen)
         p.drawEllipse(c, cr * 1.6, cr * 1.6)
-        # barra de progreso (instalación/descargas)
+        # progreso (instalación/descargas)
         if self.progress > -1.5 and self.mode in ("setup", "corner", "focus") and self.progress_text:
-            rp = R * 1.18
+            rp = R * 1.22
             p.setPen(QPen(self._col(0.18), max(2.0, R / 30)))
             p.setBrush(Qt.NoBrush)
             p.drawEllipse(c, rp, rp)
-            pen = QPen(self._col(0.95), max(3.0, R / 26), Qt.SolidLine, Qt.RoundCap)
-            p.setPen(pen)
+            p.setPen(QPen(self._col(0.95), max(3.0, R / 26), Qt.SolidLine, Qt.RoundCap))
             rect = QRectF(c.x() - rp, c.y() - rp, 2 * rp, 2 * rp)
             if self.progress >= 0:
                 p.drawArc(rect, 90 * 16, int(-360 * 16 * min(1.0, self.progress)))
@@ -379,17 +579,18 @@ class Overlay(QWidget):
     def _paint_focus_text(self, p: QPainter) -> None:
         c, R = self.pos_c, self.r
         W = self.width()
-        y = c.y() + R * 1.55 + 18
+        y = c.y() + R * 1.75 + 14
         p.setFont(self.f_title)
         p.setPen(self._col(0.95))
         p.drawText(QRectF(0, y, W, 34), Qt.AlignHCenter | Qt.AlignVCenter, "J.A.R.V.I.S.")
         y += 38
-        st = self.progress_text if self.mode == "setup" else (self.status or STATE_TEXT.get(self.state, ""))
-        if self.state == "listening" and not self.status:
-            st = f"Le escucho, {settings['address']}"
+        st = self.progress_text if self.mode == "setup" else self.status
+        if not st:
+            st = {"listening": f"Te escucho, {settings['address']}", "thinking": "Procesando…",
+                  "acting": "Trabajando…"}.get(self.state, "")
         if st:
             p.setFont(self.f_status)
-            p.setPen(self._col(0.7, WHITE))
+            p.setPen(self._col(0.75, WHITE))
             p.drawText(QRectF(0, y, W, 26), Qt.AlignHCenter | Qt.AlignVCenter, st)
             y += 30
         if self.mode == "setup" and self.progress >= 0:
@@ -408,6 +609,70 @@ class Overlay(QWidget):
             p.setPen(self._col(0.92 * fade, WHITE))
             p.drawText(QRectF(W * 0.18, y + 16, W * 0.64, 120), Qt.AlignHCenter | Qt.TextWordWrap, self.subtitle)
 
+    def _tele_rect(self) -> QRectF:
+        c, R = self.pos_c, self.r
+        return QRectF(c.x() - R * 3.4, c.y() - R * 0.7, R * 6.8, R * 1.4)
+
+    def _paint_telemetry(self, p: QPainter) -> None:
+        if self.r < 70:
+            return
+        c, R = self.pos_c, self.r
+        p.setFont(self.f_mono)
+        hour, cpu, ram = self.telemetry
+        left = [("HORA", hour), ("ESTADO", STATE_LABEL.get(self.state, "")), ("NÚCLEO", f"v{VERSION}")]
+        right = [("SISTEMA", cpu), ("MEMORIA", ram), ("ENLACE", "LOCAL · SEGURO")]
+        for side, items in ((-1, left), (1, right)):
+            x0 = c.x() + side * R * 1.95
+            for i, (k, v) in enumerate(items):
+                y = c.y() - R * 0.45 + i * 26
+                align = (Qt.AlignRight if side < 0 else Qt.AlignLeft) | Qt.AlignVCenter
+                rect = QRectF(x0 - (220 if side < 0 else 0), y, 220, 22)
+                p.setPen(self._col(0.45))
+                p.drawText(rect, align, f"{k}  {v}" if side > 0 else f"{v}  {k}")
+            # línea guía hacia el núcleo
+            p.setPen(QPen(self._col(0.25), 1))
+            p.drawLine(QPointF(c.x() + side * R * 1.25, c.y()), QPointF(x0 - side * 6, c.y()))
+
+    # ------------------------------------------------------------------ presentación
+    def _paint_intro(self, p: QPainter) -> None:
+        W, H = self.width(), self.height()
+        now = time.time()
+        # registro de arranque (abajo a la izquierda)
+        p.setFont(self.f_mono)
+        y = H - 40 - 22 * len(self.intro_lines)
+        for ts, line in self.intro_lines:
+            age = now - ts
+            shown = line[: int(age * 70)]
+            p.setPen(self._col(0.75 if age < 2 else 0.45))
+            p.drawText(QPointF(48, y), "> " + shown + ("_" if len(shown) < len(line) and int(now * 6) % 2 else ""))
+            y += 22
+        # título
+        if self.intro_title:
+            a = min(1.0, (now - self.intro_title) / 2.0)
+            c, R = self.pos_c, self.r
+            ty = c.y() + R * 1.8 + 10
+            p.setFont(self.f_big)
+            letters = "J.A.R.V.I.S."
+            visible = letters[: max(0, int((now - self.intro_title) * 9))]
+            glow = QColor(CYAN)
+            glow.setAlphaF(0.35 * a)
+            p.setPen(glow)
+            for dx, dy in ((-2, 0), (2, 0), (0, -2), (0, 2)):
+                p.drawText(QRectF(dx, ty + dy, W, 70), Qt.AlignHCenter | Qt.AlignVCenter, visible)
+            p.setPen(self._col(a, WHITE))
+            p.drawText(QRectF(0, ty, W, 70), Qt.AlignHCenter | Qt.AlignVCenter, visible)
+            if now - self.intro_title > 1.6:
+                b = min(1.0, (now - self.intro_title - 1.6) / 1.5)
+                p.setFont(self.f_status)
+                p.setPen(self._col(0.7 * b))
+                p.drawText(QRectF(0, ty + 70, W, 26), Qt.AlignHCenter, "JUST  A  RATHER  VERY  INTELLIGENT  SYSTEM")
+        if self.subtitle and now - self.subtitle_ts < 9:
+            fade = min(1.0, (9 - (now - self.subtitle_ts)) / 1.5)
+            p.setFont(self.f_sub)
+            p.setPen(self._col(0.9 * fade, WHITE))
+            p.drawText(QRectF(W * 0.18, H - 170, W * 0.64, 110), Qt.AlignHCenter | Qt.TextWordWrap, self.subtitle)
+
+    # ------------------------------------------------------------------ panel de la esquina
     def _panel_rect(self) -> QRectF:
         if self.mode != "corner":
             return QRectF()
@@ -415,7 +680,7 @@ class Overlay(QWidget):
         h = 96 + 24 * len(self.plan) + (64 if self.subtitle else 0)
         c = self.corner_center()
         x = self.width() - w - 22 if "right" in settings["corner"] else 22
-        y = c.y() + 66 if "top" in settings["corner"] else c.y() - 66 - h
+        y = c.y() + 72 if "top" in settings["corner"] else c.y() - 72 - h
         return QRectF(x, y, w, h)
 
     def _paint_panel(self, p: QPainter) -> None:
@@ -425,17 +690,30 @@ class Overlay(QWidget):
         a = min(1.0, max(0.0, 1 - abs(self.r - self.r_t) / 30))
         if a < 0.05:
             return
-        p.setPen(QPen(self._col(0.45 * a), 1))
+        # caja con esquinas recortadas (estilo HUD)
+        cut = 14
+        path = QPainterPath()
+        path.moveTo(r.x() + cut, r.y())
+        path.lineTo(r.right(), r.y())
+        path.lineTo(r.right(), r.bottom() - cut)
+        path.lineTo(r.right() - cut, r.bottom())
+        path.lineTo(r.x(), r.bottom())
+        path.lineTo(r.x(), r.y() + cut)
+        path.closeSubpath()
+        p.setPen(QPen(self._col(0.5 * a), 1))
         p.setBrush(QColor(3, 12, 22, int(232 * a * self.alpha)))
-        p.drawRoundedRect(r, 14, 14)
-        p.setPen(QPen(self._col(0.9 * a), 2))
-        p.drawLine(QPointF(r.x() + 16, r.y()), QPointF(r.x() + 90, r.y()))
+        p.drawPath(path)
+        p.setPen(QPen(self._col(0.95 * a), 2))
+        p.drawLine(QPointF(r.x() + cut, r.y()), QPointF(r.x() + 110, r.y()))
+        p.setPen(QPen(self._col(0.9 * a, AMBER), 2))
+        p.drawLine(QPointF(r.right() - 40, r.bottom()), QPointF(r.right() - cut, r.bottom()))
         x, y, w = r.x() + 18, r.y() + 14, r.width() - 36
         p.setFont(self.f_panel_t)
         p.setPen(self._col(0.95 * a))
         p.drawText(QRectF(x, y, w, 20), Qt.AlignLeft | Qt.AlignVCenter, "J.A.R.V.I.S.")
-        stt = {"thinking": "PROCESANDO", "acting": "EN CURSO", "speaking": "HABLANDO", "listening": "ESCUCHANDO"}.get(self.state, "")
-        p.drawText(QRectF(x, y, w, 20), Qt.AlignRight | Qt.AlignVCenter, stt)
+        blink = 0.6 + 0.4 * math.sin(time.time() * 5)
+        p.setPen(self._col(blink * a))
+        p.drawText(QRectF(x, y, w, 20), Qt.AlignRight | Qt.AlignVCenter, STATE_LABEL.get(self.state, ""))
         y += 30
         p.setFont(self.f_status)
         p.setPen(self._col(0.95 * a, WHITE))

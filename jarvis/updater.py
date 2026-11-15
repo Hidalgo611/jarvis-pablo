@@ -130,5 +130,7 @@ def announce_if_updated() -> str | None:
         memory.event("updated", VERSION)
         notes = re.sub(r"[#*`>-]+", " ", d.get("notes", "")).strip()
         notes = re.sub(r"\s+", " ", notes)[:500]
-        return f"Actualización completada. Ahora estoy en la versión {VERSION}. " + (f"Novedades: {notes}" if notes else "")
+        from .config import settings
+        return (f"Ya estoy de vuelta, {settings['address']}. Me he actualizado a la versión {VERSION}. "
+                + (f"Ahora ya tienes esto: {notes}" if notes else ""))
     return "La última actualización no se completó; sigo en la versión anterior."

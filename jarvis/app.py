@@ -32,6 +32,16 @@ SELECT = re.compile(r"^\W*(ese|esa|este|esta|[ée]se|[ée]ste|ah[ií]|quiero ese
 STOP_SCROLL = re.compile(r"^\W*(para|stop|alto|quieto|det[eé]nte|vale para)\W*$", re.I)
 
 
+WAKE_PREFIX = re.compile(r"^\W*(?:\S+\W+){0,4}?(?:hey|oye|ey|eh|hola|vale)?\W*"
+                         r"(jarvis|yarvis|jarvi|harvis|charvis|yarbis|jarbis|garvis|llarvis|jarbys|jarvys)\b[\s,.:;!¡¿?]*", re.I)
+
+
+def strip_wake(text: str) -> str:
+    """«Oye Jarvis, abre Spotify» → «abre Spotify». Solo si la palabra está al principio."""
+    m = WAKE_PREFIX.match(text)
+    return text[m.end():].strip() if m else text
+
+
 def make_icon() -> QIcon:
     pm = QPixmap(64, 64)
     pm.fill(Qt.transparent)
@@ -120,6 +130,8 @@ class Jarvis(QObject):
         self.step_idx = 0
         self.plan_len = 0
         self.task_id = 0
+        self.pending_update = None
+        self.greeter = None
         self.speaker = self.audio = self.brain = self.updater = self.skills = self.scheduler = None
         self._make_tray()
         bus.quit.connect(self.quit)
@@ -135,7 +147,8 @@ class Jarvis(QObject):
         acts = [("Activar Jarvis", lambda: self.events.put(("wake", "tray", ""))),
                 ("Escribir una orden…", self._typed_command),
                 ("Abrir documentos de Jarvis", lambda: os.startfile(DOCS_OUT)),
-                ("Ajustes (archivo)", lambda: os.startfile(SETTINGS_PATH)),
+                ("Ajustes…", self._open_settings),
+                ("Ver la presentación", lambda: self.events.put(("intro",))),
                 ("Ver registro", lambda: os.startfile(LOGS / "jarvis.log")),
                 ("Buscar actualizaciones", lambda: self.events.put(("check_update",))),
                 ("Reintentar instalación", lambda: threading.Thread(target=self._boot, daemon=True).start()),
@@ -151,6 +164,25 @@ class Jarvis(QObject):
         self.tray.activated.connect(lambda r: self.events.put(("wake", "tray", "")) if r == QSystemTrayIcon.Trigger else None)
         self.tray.show()
         self._menu = m
+
+    def _open_settings(self) -> None:
+        from .ui.settings_window import SettingsWindow
+
+        def test_voice(vid: str) -> None:
+            if self.speaker:
+                self.speaker.load_voice(vid)
+                self.speaker.say(f"Hola, {settings['address']}. Así suena esta voz. ¿Te gusta?")
+
+        def saved() -> None:
+            if self.speaker:
+                self.speaker.load_voice(settings["voice"])
+            try:
+                set_autostart()
+            except Exception:
+                log.exception("autostart")
+        self._settings_win = SettingsWindow(test_voice, saved, lambda: self.events.put(("intro",)))
+        self._settings_win.show()
+        self._settings_win.raise_()
 
     def _typed_command(self) -> None:
         from PySide6.QtWidgets import QInputDialog
@@ -246,12 +278,13 @@ class Jarvis(QObject):
 
         # saludo
         u, a = settings["user_name"], settings["address"]
+        from .experience import Greeter
+        self.greeter = Greeter(self.brain, lambda: self.session or self.brain.busy)
         msg = announce_if_updated()
-        if not msg and (first_run or not memory.get("introduced")):
-            memory.set("introduced", True)
-            msg = (f"Hola, {u}. Soy JARVIS, su asistente personal. Todos mis sistemas funcionan en su ordenador. "
-                   f"Para llamarme, diga «Hey Jarvis» o pulse control, alt y jota. Puedo abrir programas, buscar en internet, "
-                   f"preparar documentos, controlar YouTube y aprender de sus costumbres. ¿En qué puedo ayudarle?")
+        if not msg and not memory.get("intro_done"):
+            # la presentación épica llega con el primer «Hey Jarvis»
+            self.tray.showMessage("J.A.R.V.I.S.", f"Todo listo, {u}. Di «Hey Jarvis» para empezar.",
+                                  QSystemTrayIcon.Information, 12000)
         elif not msg and settings["greet_on_start"] and "--quiet" not in self.args:
             msg = f"{greeting_word()}, {a}. Sistemas en línea."
         if msg:
@@ -279,12 +312,13 @@ class Jarvis(QObject):
                 self.events.put(("wake", "tray", ""))
 
     def _check_update_bg(self) -> None:
+        time.sleep(20)
         while True:
-            info = self.updater.check() if self.updater else None
+            info = self.updater.check(force=True) if self.updater else None
             if info:
                 self.events.put(("update_available", info))
                 return
-            time.sleep(6 * 3600)
+            time.sleep(max(0.25, float(settings["update_check_hours"])) * 3600)
 
     def _interrupt_and_wake(self, source: str, rest: str) -> None:
         """Se llama desde hilos de audio/atajo: corta voz y tarea al instante y avisa al conductor."""
@@ -324,9 +358,14 @@ class Jarvis(QObject):
         self.session = False
         self.listen_id += 1
         self.audio.stop_listening()
+        from . import media
+        threading.Thread(target=media.unduck, daemon=True).start()
         bus.state.emit("idle")
         bus.mode.emit("hidden")
         bus.transcript.emit("")
+        if self.pending_update:
+            info, self.pending_update = self.pending_update, None
+            self.events.put(("update_available", info))
 
     def _handle(self, ev: tuple) -> None:
         kind = ev[0]
@@ -347,8 +386,11 @@ class Jarvis(QObject):
         elif kind == "final":
             if ev[1] != self.listen_id:
                 return
-            text = ev[2].strip()
+            raw = ev[2].strip()
+            text = strip_wake(raw)
             if not text:
+                if raw and self.greeter:  # solo dijo «Jarvis»: saludo y escucho
+                    self._say_and_wait(self.greeter.take() or f"Dime, {settings['address']}.")
                 self._listen(settings["follow_up_seconds"]) if self.session else self._end_session()
                 return
             self._utterance(text)
@@ -395,13 +437,38 @@ class Jarvis(QObject):
             if not self.session:
                 bus.mode.emit("hidden")
                 bus.state.emit("idle")
+        elif kind == "intro":
+            from .experience import run_intro
+            self.speaker.stop()
+            self.session = True
+            run_intro(self.speaker)
+            bus.mode.emit("focus")
+            self._listen(15)
+        elif kind == "update_available" and settings["auto_update"]:
+            info = ev[1]
+            if self.session or (self.brain and self.brain.busy):
+                self.pending_update = info  # al terminar la conversación
+                return
+            notes = re.sub(r"[#*`>-]+", " ", info["notes"])
+            notes = re.sub(r"\s+", " ", notes).strip()[:400]
+            bus.mode.emit("focus")
+            bus.state.emit("speaking")
+            self._say_and_wait(f"Hey, {settings['address']}. Tengo una actualización nueva disponible, la versión {info['version']}. "
+                               + (f"Incluye lo siguiente: {notes}. " if notes else "")
+                               + "Me actualizo ahora mismo y vuelvo en unos segundos.")
+            bus.state.emit("acting")
+            bus.status.emit(f"Actualizando a la versión {info['version']}…")
+            if not self.updater.apply(info):
+                self._say_and_wait("Vaya, no he podido actualizarme. Lo intentaré más tarde.")
+                bus.mode.emit("hidden")
+                bus.state.emit("idle")
         elif kind == "update_available":
             info = ev[1]
             notes = re.sub(r"[#*`>-]+", " ", info["notes"])
             notes = re.sub(r"\s+", " ", notes).strip()[:300]
 
             def yes():
-                self.speaker.say("Perfecto. Descargando la actualización; volveré en unos segundos.")
+                self.speaker.say("Perfecto. Me actualizo y vuelvo en unos segundos.")
                 self.speaker.wait()
                 bus.mode.emit("corner")
                 bus.state.emit("acting")
@@ -409,8 +476,8 @@ class Jarvis(QObject):
                 if not self.updater.apply(info):
                     self.speaker.say("No he podido actualizar. Lo intentaré más tarde.")
             self.pending_q = {"text": f"Por cierto, {settings['address']}: hay una actualización disponible, la versión "
-                                      f"{info['version']}. {('Incluye: ' + notes + '. ') if notes else ''}¿Quiere que actualice ahora?",
-                              "yes": yes, "no": lambda: self.speaker.say("De acuerdo, se lo recordaré más tarde."),
+                                      f"{info['version']}. {('Incluye: ' + notes + '. ') if notes else ''}¿Quieres que me actualice ahora?",
+                              "yes": yes, "no": lambda: self.speaker.say("De acuerdo, te lo recuerdo más tarde."),
                               "asked": False}
             if not self.session:
                 self.events.put(("ask_pending",))
@@ -443,12 +510,24 @@ class Jarvis(QObject):
         bus.mode.emit("focus")
         bus.state.emit("listening")
         bus.subtitle.emit("")
-        self.speaker.play_chime()
         memory.event("wake", source)
+        if not memory.get("intro_done") and source != "typed":
+            self.events.put(("intro",))
+            return
+        if settings["duck_media"]:
+            from . import media
+            threading.Thread(target=media.duck, daemon=True).start()
+        self.speaker.play_chime()
         if rest and (source == "typed" or len(rest.split()) >= 2):
             self._utterance(rest)
-        else:
-            self._listen(settings["first_listen_seconds"])
+            return
+        seeded = self.audio._seed is not None
+        if not seeded and self.greeter:
+            hello = self.greeter.take()
+            if hello:
+                bus.state.emit("speaking")
+                self._say_and_wait(hello)
+        self._listen(settings["first_listen_seconds"])
 
     def _utterance(self, text: str) -> None:
         from .tools.browser import browser, browsing_active
@@ -467,7 +546,7 @@ class Jarvis(QObject):
             self.pending_q = None
         # 2) despedidas / cancelar
         if CANCEL.match(text):
-            self._say_and_wait(random.choice(["Como desee.", "A su servicio.", f"Aquí estaré, {settings['address']}."]))
+            self._say_and_wait(random.choice(["Como quieras.", "Aquí estaré.", f"Cuando quieras, {settings['address']}."]))
             self._end_session()
             return
         # 3) elegir en lo que se está recorriendo ("ese")
@@ -551,13 +630,13 @@ class Jarvis(QObject):
 
                 def yes(p=p):
                     name = detector.answer(p, True)
-                    self.speaker.say(f"Hecho. He creado la rutina «{name}». Puede pedirme que la quite cuando quiera.")
+                    self.speaker.say(f"Hecho. He creado la rutina «{name}». Puedes pedirme que la quite cuando quieras.")
 
                 def no(p=p):
                     detector.answer(p, False)
                     self.speaker.say("Entendido. No volveré a preguntarlo.")
                 self.pending_q = {"text": f"Por cierto, {settings['address']}: he notado que {p['text'].split(' (')[0]}. "
-                                          f"¿Quiere que lo haga yo automáticamente?", "yes": yes, "no": no, "asked": True}
+                                          f"¿Quieres que lo haga yo automáticamente?", "yes": yes, "no": no, "asked": True}
                 self._say_and_wait(self.pending_q["text"])
         if self.pending_q and not self.pending_q.get("asked"):
             self.pending_q["asked"] = True

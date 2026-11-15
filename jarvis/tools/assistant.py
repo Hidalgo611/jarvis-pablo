@@ -106,32 +106,31 @@ def delete_routine(name: str) -> str:
     return f"Borradas: {', '.join(r[1] for r in hit)}" if hit else "No hay ninguna rutina con ese nombre."
 
 
-@tool("voices", "Gestiona la voz de Jarvis: listar voces disponibles, cambiar de voz (la descarga si hace falta), cambiar velocidad o activar/desactivar el efecto robótico.",
-      {"action": S("Acción", ["list", "set", "speed", "effect_on", "effect_off"]),
-       "voice": S("Id de la voz (para set)"), "value": N("Velocidad (0.7-1.4) o hablante (0/1)")},
+@tool("voices", "Gestiona la voz de Jarvis: listar voces, cambiar de voz, cambiar la velocidad o el efecto (sutil, robot, off).",
+      {"action": S("Acción", ["list", "set", "speed", "effect"]),
+       "voice": S("Id de la voz (para set), p.ej. jarvis-grave"), "value": S("Velocidad (0.8-1.3) o efecto: sutil/robot/off")},
       ["action"], label="Ajustando mi voz")
-def voices_tool(action: str, voice: str | None = None, value: float | None = None) -> str:
+def voices_tool(action: str, voice: str | None = None, value: str | None = None) -> str:
     sp = CTX.get("speaker")
     if action == "list":
         return voices.describe()
     if action == "set" and voice:
-        vid = next((v for v in voices.CATALOG if voice.lower() in v.lower()), voice)
-        if not voices.installed(vid):
-            from ..installer import download_voice
-            if not download_voice(vid):
-                return f"No he podido descargar la voz {vid}."
-        if sp and sp.load_voice(vid):
-            settings.set("voice", vid)
-            if value is not None:
-                settings.set("voice_speaker", int(value))
-            return f"Voz cambiada a {vid}."
-        return "No he podido cargar esa voz."
+        vid = next((v for v in voices.CATALOG if voice.lower().replace(" ", "-") in v), None)
+        if not vid:
+            return "No conozco esa voz. Voces: " + ", ".join(voices.CATALOG)
+        settings.set("voice", vid)
+        if sp:
+            sp.load_voice(vid)
+        return f"Voz cambiada a {vid}."
     if action == "speed" and value:
-        settings.set("voice_speed", max(0.6, min(1.5, float(value))))
+        try:
+            settings.set("voice_speed", max(0.7, min(1.4, float(value))))
+        except ValueError:
+            return "Velocidad no válida."
         return "Velocidad ajustada."
-    if action in ("effect_on", "effect_off"):
-        settings.set("voice_fx", action == "effect_on")
-        return "Efecto de voz " + ("activado." if action == "effect_on" else "desactivado.")
+    if action == "effect" and value in ("sutil", "robot", "off"):
+        settings.set("voice_fx", value)
+        return f"Efecto de voz: {value}."
     return "Acción desconocida."
 
 

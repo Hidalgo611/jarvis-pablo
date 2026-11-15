@@ -71,12 +71,23 @@ class AudioEngine(threading.Thread):
         self._stream = None
         self._last_wake = 0.0
         self._partial_busy = False
+        self._kw_busy = False
+        self.ring: deque = deque(maxlen=40)   # últimos ~3,2 s (modo espera)
+        self._kw_tick = 0
+        self._last_speech = 0.0
+        self._seg_max = 0.0
+        self._seed: tuple | None = None      # audio de la llamada «Jarvis, …» para empezar la orden
         self.paused = False
 
     # ---------- API ----------
     def listen(self, timeout_s: float, on_partial, on_final, on_timeout) -> None:
         self._listen_cb = (time.time() + timeout_s, on_partial, on_final, on_timeout)
         self._reset_utt()
+        seed, self._seed = self._seed, None
+        if seed and time.time() - seed[0] < 2.5:
+            # la orden empezó en la misma frase que «Jarvis»: se conserva ese audio
+            self.utt = list(seed[1])
+            self.started = True
         self.mode = "listen"
 
     def stop_listening(self) -> None:
@@ -148,28 +159,30 @@ class AudioEngine(threading.Thread):
             self.on_wake(source, rest)
 
     def _wake_step(self, chunk: np.ndarray, speech: bool) -> None:
+        self.ring.append(chunk)
         score = self.wake.process(chunk)
+        now = time.time()
+        if speech:
+            self._last_speech = now
+            self._seg_max = max(self._seg_max, score)
+        elif self._seg_max > 0 and now - self._last_speech > 0.6:
+            if self._seg_max > 0.12:
+                log.info("wake: puntuación máx. %.2f (umbral %.2f)", self._seg_max, float(settings["wake_threshold"]))
+            self._seg_max = 0.0
         thr = float(settings["wake_threshold"]) + (0.3 if self.tts_active else 0.0)
         if score >= thr:
             self._fire_wake("voice")
             return
         if self.tts_active or not settings["keyword_wake"]:
-            self.kw_buf = []
             return
-        # Vía 2: buscar "Jarvis" en lo reconocido (sirve con acento español y "Jarvis, abre…")
-        if speech:
-            self.kw_buf.append(chunk)
-            self.kw_sil = 0
-            if len(self.kw_buf) > 12 * SR // CHUNK:  # frase demasiado larga: no es una llamada
-                self.kw_buf = self.kw_buf[-int(12 * SR / CHUNK):]
-        elif self.kw_buf:
-            self.kw_buf.append(chunk)
-            self.kw_sil += 80
-            if self.kw_sil >= 400:
-                pcm = np.concatenate(self.kw_buf)
-                self.kw_buf = []
-                if 0.35 * SR <= pcm.shape[0] <= 12 * SR:
-                    self.asr_q.put(("kw", pcm))
+        # Vía 2: cada ~1 s mientras hay voz, reconoce los últimos 2,5 s y busca «Jarvis».
+        # Funciona aunque haya voz de fondo continua (vídeos, directos) y con acento español.
+        self._kw_tick += 1
+        if now - self._last_speech < 0.5 and self._kw_tick >= 12 and not self._kw_busy and len(self.ring) >= 8:
+            self._kw_tick = 0
+            self._kw_busy = True
+            win = list(self.ring)[-31:]
+            self.asr_q.put(("kw", np.concatenate(win), win))
 
     def _listen_step(self, chunk: np.ndarray, speech: bool) -> None:
         deadline, on_partial, on_final, on_timeout = self._listen_cb
@@ -219,12 +232,17 @@ class AudioEngine(threading.Thread):
                     job[2](text)
                 elif kind == "kw" and self.mode == "wake":
                     text = self.asr(job[1])
+                    if re.search(r"(j|y|h|ch|g|ll)ar|vis\b|bis\b", text, re.I):
+                        log.info("wake kw: %r", text[:80])
                     m = WAKE_RE.search(text)
-                    if m and len(text[:m.start()].split()) <= 3:
-                        rest = text[m.end():].strip(" ,.;:¡!¿?")
-                        self._fire_wake("keyword", rest)
+                    if m:
+                        self._seed = (time.time(), job[2])
+                        self.ring.clear()
+                        self._fire_wake("keyword", "")
             except Exception:
                 log.exception("error ASR")
             finally:
                 if kind == "partial":
                     self._partial_busy = False
+                elif kind == "kw":
+                    self._kw_busy = False

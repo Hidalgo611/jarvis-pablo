@@ -3,6 +3,7 @@ logging.basicConfig(level=logging.WARNING)
 from PySide6.QtCore import QCoreApplication
 app=QCoreApplication([])
 from jarvis import tools; tools.load_all()
+import jarvis.tools.system as _s; _s.move_mouse_visibly = lambda *a, **k: None
 from jarvis.tools import system; system.build_index()
 from jarvis.brain import Brain
 b=Brain()

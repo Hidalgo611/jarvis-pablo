@@ -64,26 +64,17 @@ def _fetch(url: str, dest: Path, kind: str, label: str) -> None:
             t.extractall(dest, filter="data")
 
 
-def download_voice(vid: str) -> bool:
-    try:
-        _fetch(voices.url(vid), MODELS, "tar", f"voz {vid}")
-        return voices.installed(vid)
-    except Exception:
-        log.exception("voz %s", vid)
-        return False
+ASSETS.append((voices.SUPERTONIC_DIR / "vocoder.int8.onnx", voices.SUPERTONIC_URL, MODELS, "tar", "módulo de voz"))
 
 
 def models_ready() -> bool:
-    return all(chk.exists() for chk, *_ in ASSETS) and voices.installed(settings["voice"])
+    return all(chk.exists() for chk, *_ in ASSETS)
 
 
 def ensure_models() -> None:
     for chk, url, dest, kind, label in ASSETS:
         if not chk.exists():
             _fetch(url, dest, kind, label)
-    if not voices.installed(settings["voice"]):
-        if not download_voice(settings["voice"]):
-            raise RuntimeError("no se pudo descargar la voz")
 
 
 # ------------------------------------------------------------- Ollama
@@ -205,7 +196,8 @@ def run_setup() -> None:
     bus.progress.emit(-1, "Calentando el núcleo…")
     try:
         requests.post(settings["ollama_url"] + "/api/generate",
-                      json={"model": settings["model"], "prompt": "", "keep_alive": -1}, timeout=120)
+                      json={"model": settings["model"], "prompt": "", "keep_alive": -1,
+                            "options": {"num_ctx": int(settings["num_ctx"])}}, timeout=120)
     except Exception:
         pass
     bus.progress.emit(1.0, "Sistemas en línea")

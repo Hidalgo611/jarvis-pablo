@@ -1,39 +1,36 @@
-"""Catálogo de voces descargables (gratis, sin límite)."""
+"""Catálogo de voces (Supertonic 3: 31 idiomas, natural, local, gratis sin límite)."""
 from __future__ import annotations
 
 from .config import MODELS
 
-BASE = "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/"
+SUPERTONIC_DIR = MODELS / "sherpa-onnx-supertonic-3-tts-int8-2026-05-11"
+SUPERTONIC_URL = ("https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/"
+                  "sherpa-onnx-supertonic-3-tts-int8-2026-05-11.tar.bz2")
 
-# id -> (descripción hablada, archivo, nº de hablantes)
+# id -> sid dentro del modelo + descripción (tono medido en Hz)
 CATALOG: dict[str, dict] = {
-    "es_ES-davefx-medium": {"desc": "masculina, castellano, grave y clara (la predeterminada)", "speakers": 1},
-    "es_ES-sharvard-medium": {"desc": "castellano, tiene una voz masculina (0) y otra femenina (1)", "speakers": 2},
-    "es_ES-carlfm-x_low": {"desc": "masculina, castellano, sencilla y muy rápida", "speakers": 1},
-    "es_MX-ald-medium": {"desc": "masculina, acento mexicano", "speakers": 1},
-    "es_MX-claude-high": {"desc": "masculina, acento mexicano, alta calidad", "speakers": 1},
-    "es_AR-daniela-high": {"desc": "femenina, acento argentino, alta calidad", "speakers": 1},
+    "jarvis-grave": {"sid": 9, "desc": "masculina muy grave y pausada (88 Hz)"},
+    "jarvis-clasico": {"sid": 6, "desc": "masculina grave, elegante (98 Hz) — predeterminada"},
+    "jarvis-medio": {"sid": 7, "desc": "masculina de tono medio (109 Hz)"},
+    "jarvis-claro": {"sid": 8, "desc": "masculina clara (123 Hz)"},
+    "jarvis-joven": {"sid": 5, "desc": "masculina más joven (130 Hz)"},
+    "viernes-1": {"sid": 2, "desc": "femenina cálida (173 Hz), estilo «Viernes»"},
+    "viernes-2": {"sid": 4, "desc": "femenina serena (173 Hz)"},
+    "viernes-3": {"sid": 0, "desc": "femenina (194 Hz)"},
+    "viernes-4": {"sid": 3, "desc": "femenina (199 Hz)"},
+    "viernes-5": {"sid": 1, "desc": "femenina aguda (209 Hz)"},
 }
-
-MORE_INFO = ("Muestras para escuchar: rhasspy.github.io/piper-samples. "
-             "Catálogo completo: github.com/k2-fsa/sherpa-onnx/releases/tag/tts-models")
-
-
-def voice_dir(voice: str):
-    return MODELS / f"vits-piper-{voice}"
+DEFAULT = "jarvis-clasico"
+MORE_INFO = "Demo para escuchar todas las voces: huggingface.co/spaces/Supertone/supertonic-3"
 
 
-def installed(voice: str) -> bool:
-    return (voice_dir(voice) / f"{voice}.onnx").exists()
+def installed(voice: str = DEFAULT) -> bool:
+    return (SUPERTONIC_DIR / "vocoder.int8.onnx").exists()
 
 
-def url(voice: str) -> str:
-    return f"{BASE}vits-piper-{voice}.tar.bz2"
+def sid(voice: str) -> int:
+    return CATALOG.get(voice, CATALOG[DEFAULT])["sid"]
 
 
 def describe() -> str:
-    lines = []
-    for vid, info in CATALOG.items():
-        mark = " (instalada)" if installed(vid) else ""
-        lines.append(f"- {vid}: {info['desc']}{mark}")
-    return "\n".join(lines) + "\n" + MORE_INFO
+    return "\n".join(f"- {vid}: {info['desc']}" for vid, info in CATALOG.items()) + "\n" + MORE_INFO

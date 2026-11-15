@@ -14,6 +14,7 @@ class Bus(QObject):
     progress = Signal(float, str)  # 0..1 o -1, texto (instalación/descargas)
     mouse = Signal(bool)           # Jarvis controla el ratón
     mouse_target = Signal(int, int)  # posición física a la que va el ratón
+    intro = Signal(str)            # presentación: start | line:<texto> | title | end
     wake = Signal(str)             # origen de la activación: voice | hotkey | tray
     quit = Signal()
 

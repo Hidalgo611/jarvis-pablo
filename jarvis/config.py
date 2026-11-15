@@ -10,7 +10,7 @@ from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
 APP_NAME = "Jarvis"
-VERSION = "0.1.3"
+VERSION = "0.2.0"
 # Repositorio público de GitHub donde se publican las versiones ("usuario/repo").
 # Vacío = actualizaciones desactivadas.
 UPDATE_REPO = "Hidalgo611/jarvis-pablo"
@@ -35,24 +35,26 @@ for _d in (DATA, MODELS, SKILLS, LOGS, DOCS_OUT, SHOTS_OUT):
 
 DEFAULTS: dict = {
     "user_name": "Pablo",
-    "address": "señor",            # cómo le llama Jarvis
+    "address": "Pablo",            # cómo le llama Jarvis
     "assistant_name": "Jarvis",
     "ollama_url": "http://127.0.0.1:11434",
     "model": "qwen3:8b",           # cerebro principal (herramientas)
     "vision_model": "qwen3.5:4b",  # para "mira mi pantalla"
     "num_ctx": 8192,
-    "voice": "es_ES-davefx-medium",
-    "voice_speaker": 0,
+    "voice": "jarvis-clasico",
     "voice_speed": 1.0,
-    "voice_fx": True,
+    "voice_fx": "sutil",          # sutil | robot | off
     "volume": 1.0,
-    "wake_threshold": 0.5,
+    "wake_threshold": 0.45,
     "end_silence_ms": 800,
     "follow_up_seconds": 7,
     "first_listen_seconds": 8,
     "hotkey": "ctrl+alt+j",
     "dim_opacity": 0.9,
-    "keyword_wake": True,          # detectar "Jarvis" también con el reconocedor (mejor con acento español)
+    "keyword_wake": True,
+    "duck_media": True,            # bajar el volumen de otras apps mientras escucha
+    "auto_update": True,           # instalar actualizaciones en cuanto se detectan (avisando)
+    "update_check_hours": 1,          # detectar "Jarvis" también con el reconocedor (mejor con acento español)
     "corner": "top-right",
     "show_subtitles": True,
     "show_transcript": False,
@@ -73,7 +75,22 @@ class Settings:
                 self.data.update(json.loads(SETTINGS_PATH.read_text(encoding="utf-8")))
             except Exception:
                 logging.exception("settings.json corrupto; uso valores por defecto")
+        self._migrate()
         self.save()
+
+    def _migrate(self) -> None:
+        """Ajustes de versiones anteriores → actuales (sin perder lo que el usuario cambió)."""
+        v = self.data.get("settings_version", 1)
+        if v < 2:
+            if not str(self.data.get("voice", "")).startswith(("jarvis-", "viernes-")):
+                self.data["voice"] = DEFAULTS["voice"]
+            if self.data.get("voice_fx") is True:
+                self.data["voice_fx"] = "sutil"
+            if self.data.get("address") == "señor":
+                self.data["address"] = DEFAULTS["address"]
+            if self.data.get("wake_threshold") == 0.5:
+                self.data["wake_threshold"] = DEFAULTS["wake_threshold"]
+        self.data["settings_version"] = 2
 
     def __getitem__(self, k):
         return self.data.get(k, DEFAULTS.get(k))
