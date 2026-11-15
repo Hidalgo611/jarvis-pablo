@@ -22,6 +22,7 @@ from .config import EXE_PATH, FROZEN, PENDING_UPDATE, UPDATE_REPO, VERSION
 from .memory import memory
 
 log = logging.getLogger("updater")
+MUTEX = None  # lo guarda app.single_instance(); se suelta antes de lanzar la versión nueva
 
 
 def _ver(s: str) -> tuple:
@@ -82,10 +83,17 @@ class Updater:
                 old.unlink()
             os.replace(exe, old)
             os.replace(new, exe)
+            global MUTEX
+            if MUTEX is not None:
+                import win32api
+                win32api.CloseHandle(MUTEX)
+                MUTEX = None
             subprocess.Popen([str(exe), "--after-update"], close_fds=True,
                              creationflags=subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP)
+            log.info("versión nueva lanzada; cerrando esta")
             bus.quit.emit()
-            return True
+            time.sleep(1.5)
+            os._exit(0)
         except Exception:
             log.exception("apply update")
             bus.progress.emit(-1, "")

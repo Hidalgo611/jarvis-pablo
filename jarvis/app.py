@@ -572,10 +572,11 @@ def single_instance() -> bool:
     import win32api
     import win32event
     import winerror
-    for _ in range(20):
+    from . import updater
+    for _ in range(90):
         h = win32event.CreateMutex(None, False, "JarvisAssistant.Singleton")
         if win32api.GetLastError() != winerror.ERROR_ALREADY_EXISTS:
-            globals()["_mutex"] = h
+            updater.MUTEX = h
             return True
         if "--after-update" not in sys.argv:
             if "--command" in sys.argv and sys.argv.index("--command") + 1 < len(sys.argv):
@@ -588,6 +589,7 @@ def single_instance() -> bool:
             return False
         win32api.CloseHandle(h)
         time.sleep(0.5)
+    log.warning("otra instancia no se cerró a tiempo")
     return False
 
 
