@@ -128,6 +128,7 @@ class Overlay(QWidget):
         bus.mouse.connect(self.set_mouse)
         bus.mouse_target.connect(self.set_mouse_target)
         bus.intro.connect(self.set_intro)
+        bus.capture.connect(lambda on: self.setWindowOpacity(0.0 if on else 1.0))
 
         self.timer = QTimer(self)
         self.timer.timeout.connect(self.tick)

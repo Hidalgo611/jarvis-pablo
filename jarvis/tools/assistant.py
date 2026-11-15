@@ -66,7 +66,7 @@ def set_reminder(text: str, minutes: float | None = None, at: str | None = None)
     return f"Recordatorio para las {time.strftime('%H:%M', time.localtime(due))}: {text}"
 
 
-@tool("create_routine", "Crea una rutina automática: a una hora, al encender el PC o con una frase, Jarvis ejecuta acciones (herramientas existentes). Pide confirmación al usuario antes si no lo ha pedido él explícitamente.",
+@tool("create_routine", "Crea una rutina: a una hora, al encender o con una frase, ejecuta acciones (herramientas existentes).",
       {"name": S("Nombre corto"),
        "trigger_type": S("Cuándo", ["time", "startup", "phrase"]),
        "time": S("HH:MM si es por hora"),
@@ -135,8 +135,8 @@ def voices_tool(action: str, voice: str | None = None, value: str | None = None)
 
 
 @tool("settings", "Cambia ajustes de Jarvis: nombre del usuario, cómo llamarle (señor, Pablo…), tiempo de escucha, mostrar subtítulos, esquina del núcleo, modelo de IA.",
-      {"key": S("Ajuste", ["user_name", "address", "follow_up_seconds", "end_silence_ms", "show_subtitles", "corner", "model",
-                           "wake_threshold", "greet_on_start"]),
+      {"key": S("Ajuste", ["user_name", "address", "city", "follow_up_seconds", "end_silence_ms", "show_subtitles", "corner",
+                           "model", "wake_threshold", "greet_on_start", "notifications", "barge_in"]),
        "value": S("Nuevo valor")}, ["key", "value"], label="Cambiando ajustes")
 def settings_tool(key: str, value: str) -> str:
     cur = settings[key]
@@ -168,7 +168,7 @@ def check_updates(install: bool = False) -> str:
     return f"Hay una versión nueva {info['version']}. Novedades: {info['notes'][:600]}"
 
 
-@tool("create_skill", "Crea una HABILIDAD nueva escribiendo código Python cuando ninguna herramienta existente sirve. Solo con permiso del usuario. El código debe definir SKILL = {'name','description','parameters'} y def run(**kwargs) -> str, y solo puede importar módulos seguros y 'jarvis_api'.",
+@tool("create_skill", "Crea una habilidad nueva en Python (solo con permiso). Debe definir SKILL={'name','description','parameters'} y def run(**kwargs)->str; solo puede importar módulos seguros y jarvis_api.",
       {"name": S("nombre_en_minúsculas"), "description": S("Qué hace"), "code": S("Código Python completo")},
       ["name", "description", "code"], label=lambda a: f"Programando habilidad «{a.get('name', '')}»")
 def create_skill(name: str, description: str, code: str) -> str:

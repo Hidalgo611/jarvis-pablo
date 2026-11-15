@@ -67,6 +67,7 @@ class AudioEngine(threading.Thread):
         self.mode = "wake"           # wake | listen | off
         self.tts_active = False
         self.on_wake: Optional[Callable[[str, str], None]] = None   # (source, resto_del_comando)
+        self.on_barge: Optional[Callable[[str], bool]] = None        # ¿lo oído mientras hablo es el usuario?
         self._listen_cb = None
         self._stream = None
         self._last_wake = 0.0
@@ -173,7 +174,17 @@ class AudioEngine(threading.Thread):
         if score >= thr:
             self._fire_wake("voice")
             return
-        if self.tts_active or not settings["keyword_wake"]:
+        if self.tts_active:
+            # Interrumpir hablando: cada ~0,8 s con voz, reconoce los últimos 2 s y el conductor decide si es eco o el usuario
+            self._kw_tick += 1
+            if (settings["barge_in"] and now - self._last_speech < 0.4 and self._kw_tick >= 10 and not self._kw_busy
+                    and len(self.ring) >= 10):
+                self._kw_tick = 0
+                self._kw_busy = True
+                win = list(self.ring)[-25:]
+                self.asr_q.put(("barge", np.concatenate(win), win))
+            return
+        if not settings["keyword_wake"]:
             return
         # Vía 2: cada ~1 s mientras hay voz, reconoce los últimos 2,5 s y busca «Jarvis».
         # Funciona aunque haya voz de fondo continua (vídeos, directos) y con acento español.
@@ -230,6 +241,13 @@ class AudioEngine(threading.Thread):
                     text = self.asr(job[1])
                     log.info("ASR final %.2fs (%.1fs audio): %s", time.time() - t0, job[1].shape[0] / SR, text)
                     job[2](text)
+                elif kind == "barge" and self.tts_active and self.mode == "wake":
+                    text = self.asr(job[1])
+                    if text and self.on_barge and self.on_barge(text):
+                        log.info("interrupción: %r", text[:80])
+                        self._seed = (time.time(), job[2])
+                        self.ring.clear()
+                        self._fire_wake("barge", "")
                 elif kind == "kw" and self.mode == "wake":
                     text = self.asr(job[1])
                     if re.search(r"(j|y|h|ch|g|ll)ar|vis\b|bis\b", text, re.I):
@@ -244,5 +262,5 @@ class AudioEngine(threading.Thread):
             finally:
                 if kind == "partial":
                     self._partial_busy = False
-                elif kind == "kw":
+                elif kind in ("kw", "barge"):
                     self._kw_busy = False

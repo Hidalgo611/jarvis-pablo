@@ -54,6 +54,8 @@ def _hora(m: re.Match) -> str:
 def clean_for_speech(text: str) -> str:
     text = re.sub(r"\b[Ee]s las\b", "Son las", text)
     text = re.sub(r"\b(\d{1,2}):(\d{2})\b", _hora, text)
+    text = re.sub(r"\[[^\]]{0,400}\]", " ", text)          # bloques [contexto] o [enlaces]
+    text = re.sub(r"\(Contexto[^)]{0,400}\)", " ", text, flags=re.I)
     t = re.sub(r"```.*?```", " ", text, flags=re.S)
     t = re.sub(r"https?://\S+", "el enlace", t)
     t = re.sub(r"[*_#`>|~]+", " ", t)
@@ -126,6 +128,8 @@ class Speaker:
         self._pending = 0
         self._lock = threading.Lock()
         self.on_active: Optional[Callable[[bool], None]] = None
+        from collections import deque
+        self.recent: deque = deque(maxlen=4)   # frases que se están diciendo (para distinguir eco de interrupción)
         self.load_voice(settings["voice"])
         threading.Thread(target=self._synth_loop, name="tts-synth", daemon=True).start()
         threading.Thread(target=self._play_loop, name="tts-play", daemon=True).start()
@@ -249,6 +253,7 @@ class Speaker:
                 self._set_active(True)
                 if text:
                     bus.subtitle.emit(text)
+                    self.recent.append((time.time(), text))
                 block = 1024
                 for i in range(0, x.shape[0], block):
                     if self._stop.is_set() or gen != self._gen:

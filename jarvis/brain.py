@@ -58,7 +58,7 @@ def last_interaction() -> float:
 def context_prefix() -> str:
     """Contexto temporal que va DENTRO del mensaje del usuario (así el prompt de sistema no cambia y la caché vale)."""
     lt = time.localtime()
-    head = f"[{DIAS[lt.tm_wday]} {lt.tm_mday} de {MESES[lt.tm_mon - 1]} de {lt.tm_year}, {lt.tm_hour:02d}:{lt.tm_min:02d}"
+    head = f"[contexto, no lo leas: {DIAS[lt.tm_wday]} {lt.tm_mday} de {MESES[lt.tm_mon - 1]} de {lt.tm_year}, {lt.tm_hour:02d}:{lt.tm_min:02d}"
     last = last_interaction()
     gap = time.time() - last if last else 0
     if last and gap > 30 * 60:
@@ -75,7 +75,7 @@ def system_prompt() -> str:
     facts_txt = "\n".join(f"- {f}" for f in facts[-40:]) or "- (todavía nada)"
     return f"""Eres J.A.R.V.I.S. (Jarvis), la inteligencia artificial personal de {u}, como el Jarvis de Iron Man: elegante, brillante, leal y con un humor fino e ingenioso, pero cercano. Tuteas a {u} y le llamas "{a}" de vez en cuando (no en cada frase). Tienes iniciativa: te interesas por cómo le va, recuerdas lo que te cuenta y lo retomas. Funcionas en local, en su ordenador, versión {VERSION}.
 
-Cada mensaje del usuario empieza con [fecha y hora] (y a veces cuánto llevabais sin hablar y lo último que te contó). Úsalo: es la hora real. No repitas ese bloque en tus respuestas.
+Cada mensaje del usuario empieza con un bloque [contexto…] con la fecha y hora reales (y a veces cuánto llevabais sin hablar y lo último que te contó). Es información interna: úsala, pero NUNCA la repitas ni digas la fecha u hora salvo que te las pregunte.
 
 LO QUE SABES DE {u.upper()}:
 {facts_txt}
@@ -97,13 +97,19 @@ CÓMO ACTÚAS:
 - Si dicta un texto o pide un documento con contenido que ya conoces: `write_document`.
 - Datos actuales (noticias, tiempo, resultados, precios): `web_search` o `web_research`. Nunca respondas de memoria.
 - YouTube (`youtube`): "pon X" → play. "busca X" → search (solo enseña resultados; NO los recorras). "Abre el canal de X" → open_channel con query=X (el NOMBRE del canal; sin query = canal del vídeo actual) y, si pide una sección, section=vídeos/shorts/directos. Ya dentro de un canal, "sección vídeos" → channel_tab con section. "Pon el que se llama…" → play_title. "Ve bajando / enséñamelos uno a uno" → browse_results y dile que diga "ese". No abras YouTube antes de buscar.
-- Si te cuenta algo duradero sobre él (gustos, nombres, rutinas, cómo quiere que le hables), llama a `remember` y después contesta con naturalidad.
+- Correo, agenda, Drive: `email_check`, `calendar_today`, `drive_search` (usan tu navegador; si no ha iniciado sesión, díselo). «¿Qué tengo hoy?», «resumen del día», «buenos días» → `daily_briefing` y cuéntalo en 3-5 frases naturales.
+- Notificaciones: anuncia de quién son, pero NO leas el contenido de mensajes privados salvo que él te lo pida («léemelo», «¿qué dice?») → `notifications` con read_content=true.
+- Si te dice su ciudad, guárdala con `settings` (key=city) además de `remember`.
+- Si te cuenta algo duradero sobre él («me encanta X», «soy de X», «mi novia se llama X», «trabajo en X», cómo quiere que le hables), llama a `remember` y después contesta con naturalidad.
+- PANTALLA: si su mensaje trae una captura, es su pantalla en este momento (el círculo rojo «RATÓN» es el puntero). Úsala para entender «esto», «ahí», «ese botón». Para pulsar cualquier cosa de cualquier programa usa `screen_click` describiendo el elemento tal como se ve (con window=programa si sabes en cuál está). No pulses en la barra de tareas para «abrir» algo que ya está abierto: usa `focus_window`. Nunca afirmes un resultado que no hayas visto. Sin captura y si necesitas ver algo, usa `look_at_screen`.
 - Las herramientas se usan con llamadas de herramienta, NUNCA escribiendo su nombre en el texto.
 - Si te pide hacer algo, tu respuesta tiene que ser una LLAMADA A HERRAMIENTA. Solo después de ver el resultado confirmas en pocas palabras, sin preguntas de relleno. Jamás digas "hecho" sin haber llamado a la herramienta.
 - Pide confirmación antes de acciones delicadas: apagar, reiniciar, cerrar programas con trabajo sin guardar, borrar, vaciar papelera, crear habilidades nuevas.
 - Si una herramienta falla, intenta otra vía razonable una vez; si no, explica brevemente qué pasa.
 - Si te preguntan qué puedes hacer: abrir y cerrar programas, controlar el navegador y YouTube, buscar e investigar en internet, crear Word y PDF, controlar volumen, brillo y música, recordatorios, rutinas automáticas, mirar la pantalla y aprender de sus costumbres."""
 
+
+from .tools.vision import DEICTIC  # noqa: E402
 
 ACTION_RE = re.compile(r"\b(abre|abrir|ábreme|cierra|cerrar|pon|ponme|ponlo|quita|sube|baja|busca|búscame|buscar|haz|hazme|crea|"
                        r"escribe|reproduce|para|pausa|apaga|reinicia|bloquea|cambia|activa|desactiva|silencia|mete|métete|"
@@ -163,11 +169,21 @@ class Brain:
             self._sys_cache = (system_prompt(), key)
         return self._sys_cache[0]
 
-    def _payload(self, messages: list, stream: bool, num_predict: int | None = None) -> dict:
+    def _recent_tools(self) -> list[str]:
+        names = []
+        for m in self._turns():
+            for c in m.get("tool_calls") or []:
+                names.append(c.get("function", {}).get("name", ""))
+        return names
+
+    def _payload(self, messages: list, stream: bool, num_predict: int | None = None, tool_names: list | None = None) -> dict:
         opts = {"num_ctx": int(settings["num_ctx"]), "temperature": 0.6, "top_p": 0.9}
         if num_predict is not None:
             opts["num_predict"] = num_predict
-        return {"model": settings["model"], "messages": messages, "tools": tools.schemas(), "stream": stream,
+        if tool_names is None:
+            last_user = next((m["content"] for m in reversed(messages) if m.get("role") == "user"), "")
+            tool_names = tools.select(last_user, self._recent_tools())
+        return {"model": settings["model"], "messages": messages, "tools": tools.schemas(tool_names), "stream": stream,
                 "think": False, "keep_alive": -1, "options": opts}
 
     def _turns(self) -> list:
@@ -180,6 +196,7 @@ class Brain:
         slim = []
         for m in messages:
             m = dict(m)
+            m.pop("images", None)
             if m.get("role") == "tool":
                 m["content"] = m["content"][:350]
             if m.get("role") == "assistant" and m.get("tool_calls"):
@@ -218,7 +235,8 @@ class Brain:
     # ---------------------------------------------------------------- bucle del agente
     def _stream(self, messages: list, on_text: Callable[[str], None]) -> tuple[str, list]:
         content, calls = "", []
-        with self.session.post(settings["ollama_url"] + "/api/chat", json=self._payload(messages, True), stream=True,
+        with self.session.post(settings["ollama_url"] + "/api/chat",
+                               json=self._payload(messages, True, tool_names=getattr(self, "_run_tools", None)), stream=True,
                                timeout=(5, 180)) as r:
             r.raise_for_status()
             for line in r.iter_lines():
@@ -245,6 +263,16 @@ class Brain:
         self.cancel.clear()
         a = settings["address"]
         messages = self._base_messages(user_text)
+        self._run_tools = tools.select(user_text, self._recent_tools())
+        tools.CURRENT["user_text"] = user_text
+        if settings["screen_context"] and DEICTIC.search(user_text):
+            try:
+                from .tools.vision import capture
+                b64, _, _ = capture(mark_cursor=True)
+                messages[-1]["images"] = [b64]
+                messages[-1]["content"] += "\n(Adjunto: captura de mi pantalla ahora mismo.)"
+            except Exception:
+                log.exception("captura de contexto")
         self._hist_len = len(messages) - 2  # mensajes de historial (sin system ni el nuevo usuario)
         spoken_any = False
         final = ""
@@ -261,6 +289,13 @@ class Brain:
             if "<think>" in t:
                 return
             head = t.lstrip()
+            # si repite el bloque [contexto…], espera a que se cierre y quítalo (nunca se lee)
+            if head.startswith("["):
+                if "]" not in head:
+                    buf["t"] = t
+                    return
+                t = head[head.index("]") + 1:]
+                head = t.lstrip()
             # si parece una llamada a herramienta escrita como texto, no la leas en voz alta
             if head.startswith(("<tool", "`", "{")) or (len(head) < 30 and re.fullmatch(r"[a-z_]+", head or "_")):
                 buf["t"] = t
@@ -287,7 +322,8 @@ class Brain:
                     break
                 buf["t"] = ""
                 content, calls = self._stream(messages, on_text)
-                content = re.sub(r"<think>.*?</think>", "", content, flags=re.S).strip()
+                content = re.sub(r"<think>.*?</think>", "", content, flags=re.S)
+                content = re.sub(r"^\s*\[[^\]]{0,400}\]\s*", "", content).strip()
                 if not calls:
                     calls = parse_text_calls(content)
                     if calls:
@@ -351,6 +387,7 @@ class Brain:
             say(final)
         finally:
             self.busy = False
+        self._run_tools = None
         try:
             self._save_turn(messages[self._hist_len + 1:])
         except Exception:

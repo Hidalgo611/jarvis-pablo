@@ -138,7 +138,7 @@ def _vram_mb() -> int:
 def pick_model() -> str:
     v = _vram_mb()
     if v >= 7500:
-        return "qwen3:8b"
+        return "qwen3.5:9b"
     if v >= 5000:
         return "qwen3.5:4b"
     return "qwen3.5:4b"

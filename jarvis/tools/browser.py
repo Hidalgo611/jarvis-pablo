@@ -92,7 +92,7 @@ class Browser:
         BROWSER_PROFILE.mkdir(parents=True, exist_ok=True)
         self.ctx = self.pw.chromium.launch_persistent_context(
             str(BROWSER_PROFILE), channel=channel, headless=False, no_viewport=True,
-            args=["--start-maximized", "--disable-blink-features=AutomationControlled", "--no-first-run",
+            args=["--start-maximized", "--no-first-run",
                   "--no-default-browser-check", "--autoplay-policy=no-user-gesture-required"],
             ignore_default_args=["--enable-automation"], chromium_sandbox=True, locale="es-ES")
         self.ctx.add_init_script("Object.defineProperty(navigator,'webdriver',{get:()=>undefined})")
@@ -654,13 +654,9 @@ def _play_title(text: str) -> str:
     return f"Reproduciendo: {p.title()}"
 
 
-@tool("youtube", "Controla YouTube en el navegador de Jarvis. "
-      "play = buscar y reproducir el mejor resultado ('pon X'). search = buscar y enseñar resultados (NO los recorre). "
-      "browse_results = recorrer despacio los vídeos de la página resaltándolos para que el usuario diga 'ese' (solo si lo pide: 've bajando', 'enséñamelos uno a uno'). "
-      "open_channel = abrir un CANAL (query = nombre; sin query, el canal del vídeo actual). "
-      "channel_tab = abrir una sección del canal: inicio, vídeos, shorts, directos, listas (query = sección). "
-      "play_title = reproducir el vídeo de esta página cuyo título se parezca a query. play_result = el n-ésimo. "
-      "Además: pausa, pantalla completa, avanzar/retroceder segundos, calidad máxima, silenciar, velocidad, subtítulos, siguiente, saltar anuncio.",
+@tool("youtube", "YouTube. play: buscar y reproducir ('pon X'). search: enseñar resultados. open_channel: canal (query=nombre, section opcional). "
+      "channel_tab: sección del canal. play_title: vídeo de la página por título. browse_results: recorrer resaltando (solo si lo pide). "
+      "seek: value=segundos (negativo atrás).",
       {"action": S("Acción", ["play", "search", "open_channel", "channel_tab", "play_title", "play_result", "browse_results",
                               "select_highlighted", "play_pause", "fullscreen", "exit_fullscreen", "seek", "quality_max",
                               "mute", "unmute", "speed", "captions", "next_video", "skip_ad", "what_is_playing"]),
@@ -674,6 +670,9 @@ def _play_title(text: str) -> str:
                                    "fullscreen": "Pantalla completa", "seek": "Moviendo el vídeo"}.get(a.get("action"), "Controlando YouTube"))
 def youtube(action: str, query: str | None = None, value: float | None = None, section: str | None = None) -> str:
     b = browser
+    from . import CURRENT
+    if action == "search" and re.match(r"^\W*(pon|ponme|ponlo|reproduce|quiero ver)\b", CURRENT.get("user_text", ""), re.I):
+        action = "play"   # «pon X» siempre reproduce
     if action in ("search", "play"):
         q = query or ""
         memory.event("site_open", "youtube")
@@ -688,7 +687,7 @@ def youtube(action: str, query: str | None = None, value: float | None = None, s
         except Exception:
             return r
         if action == "play":
-            return youtube("play_result", value=1) + "\nOtros resultados:\n" + lst
+            return "YA SE ESTÁ REPRODUCIENDO (no preguntes si lo pone): " + youtube("play_result", value=1) + "\nOtros resultados:\n" + lst
         return ("Resultados en pantalla (no los recorras salvo que lo pida; puede decir el título, un número, "
                 "o pedir el canal):\n" + lst)
     if action == "open_channel":

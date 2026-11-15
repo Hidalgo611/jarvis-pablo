@@ -10,7 +10,7 @@ from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
 APP_NAME = "Jarvis"
-VERSION = "0.2.0"
+VERSION = "0.3.0"
 # Repositorio público de GitHub donde se publican las versiones ("usuario/repo").
 # Vacío = actualizaciones desactivadas.
 UPDATE_REPO = "Hidalgo611/jarvis-pablo"
@@ -38,8 +38,8 @@ DEFAULTS: dict = {
     "address": "Pablo",            # cómo le llama Jarvis
     "assistant_name": "Jarvis",
     "ollama_url": "http://127.0.0.1:11434",
-    "model": "qwen3:8b",           # cerebro principal (herramientas)
-    "vision_model": "qwen3.5:4b",  # para "mira mi pantalla"
+    "model": "qwen3.5:9b",         # cerebro principal: herramientas + visión (ve la pantalla)
+    "vision_model": "",            # vacío = el mismo modelo (si el cerebro no tiene visión, poner uno que sí)
     "num_ctx": 8192,
     "voice": "jarvis-clasico",
     "voice_speed": 1.0,
@@ -52,6 +52,12 @@ DEFAULTS: dict = {
     "hotkey": "ctrl+alt+j",
     "dim_opacity": 0.9,
     "keyword_wake": True,
+    "notifications": True,         # avisar de WhatsApp / móvil (sin leer el contenido)
+    "mail_accounts": [],           # se rellena solo al revisar el correo con sesión iniciada
+    "calendar_account": "",
+    "city": "",
+    "barge_in": True,              # poder interrumpir a Jarvis hablando
+    "screen_context": True,        # adjuntar la pantalla cuando la orden habla de «esto», «ahí», «clica»…
     "duck_media": True,            # bajar el volumen de otras apps mientras escucha
     "auto_update": True,           # instalar actualizaciones en cuanto se detectan (avisando)
     "update_check_hours": 1,          # detectar "Jarvis" también con el reconocedor (mejor con acento español)
@@ -90,7 +96,13 @@ class Settings:
                 self.data["address"] = DEFAULTS["address"]
             if self.data.get("wake_threshold") == 0.5:
                 self.data["wake_threshold"] = DEFAULTS["wake_threshold"]
-        self.data["settings_version"] = 2
+        if v < 3:
+            # 0.3.0: el cerebro pasa a qwen3.5 (con visión) si se había elegido automáticamente
+            if self.data.get("model") == "qwen3:8b":
+                self.data["model"] = DEFAULTS["model"]
+            if self.data.get("vision_model") == "qwen3.5:4b":
+                self.data["vision_model"] = ""
+        self.data["settings_version"] = 3
 
     def __getitem__(self, k):
         return self.data.get(k, DEFAULTS.get(k))

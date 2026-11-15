@@ -384,23 +384,3 @@ def system_status() -> str:
     du = psutil.disk_usage(str(Path.home().anchor))
     parts.append(f"Disco {du.percent:.0f} % usado, {du.free / 2**30:.0f} GB libres")
     return ". ".join(parts)
-
-
-# ------------------------------------------------------------------ visión
-@tool("look_at_screen", "Mira la pantalla actual (captura) y responde a una pregunta sobre lo que se ve.",
-      {"question": S("Qué quieres saber de la pantalla")}, ["question"], label="Analizando la pantalla")
-def look_at_screen(question: str) -> str:
-    import requests
-    from PIL import ImageGrab
-    time.sleep(0.4)
-    img = ImageGrab.grab()
-    img.thumbnail((1344, 1344))
-    buf = io.BytesIO()
-    img.convert("RGB").save(buf, "JPEG", quality=80)
-    b64 = base64.b64encode(buf.getvalue()).decode()
-    r = requests.post(settings["ollama_url"] + "/api/chat", json={
-        "model": settings["vision_model"], "stream": False, "think": False, "keep_alive": "2m",
-        "messages": [{"role": "user", "content": f"Responde en español, conciso. {question}", "images": [b64]}]},
-        timeout=180)
-    r.raise_for_status()
-    return r.json()["message"]["content"]

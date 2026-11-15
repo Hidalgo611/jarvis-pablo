@@ -42,6 +42,24 @@ def strip_wake(text: str) -> str:
     return text[m.end():].strip() if m else text
 
 
+BARGE_WORDS = re.compile(r"\b(para|par[aá]te|espera|calla|c[aá]llate|stop|basta|silencio|oye|jarvis|yarvis|vale vale|"
+                         r"no no|d[eé]jalo|un momento)\b", re.I)
+
+
+def is_user_speech(heard: str, said_sentences: list[str]) -> bool:
+    W = r"[a-záéíóúñü]{3,}"
+    h = heard.lower()
+    said_words = set(re.findall(W, " ".join(said_sentences).lower()))
+    for m in BARGE_WORDS.finditer(h):
+        if not set(re.findall(W, m.group(0))) <= said_words:   # palabra de parada que Jarvis no está diciendo
+            return True
+    words = re.findall(W, h)
+    if len(words) < 3:
+        return False
+    overlap = sum(w in said_words for w in words) / len(words)
+    return overlap < 0.35
+
+
 def make_icon() -> QIcon:
     pm = QPixmap(64, 64)
     pm.fill(Qt.transparent)
@@ -260,11 +278,14 @@ class Jarvis(QObject):
         assistant.CTX.update(speaker=self.speaker, updater=self.updater, skills=self.skills)
         self.audio = AudioEngine()
         self.audio.on_wake = self._interrupt_and_wake
+        self.audio.on_barge = self._is_user_speech
         self.speaker.on_active = self._on_speaking
         self.audio.start()
         self.scheduler = Scheduler(self._routine_actions, lambda t: self.events.put(("say", t)))
         self.scheduler.start()
         ActivityWatcher().start()
+        from .notifications import NotificationWatcher
+        NotificationWatcher(lambda t: self.events.put(("notify", t))).start()
         threading.Thread(target=hotkey_thread, args=(lambda: self._interrupt_and_wake("hotkey", ""),),
                          name="hotkey", daemon=True).start()
         threading.Thread(target=self._instance_listener, name="instance", daemon=True).start()
@@ -327,6 +348,10 @@ class Jarvis(QObject):
         if self.brain and self.brain.busy:
             self.brain.cancel.set()
         self.events.put(("wake", source, rest))
+
+    def _is_user_speech(self, heard: str) -> bool:
+        """Mientras Jarvis habla: ¿lo que entra por el micro es el usuario (interrumpe) o el eco de su propia voz?"""
+        return is_user_speech(heard, [t for ts, t in self.speaker.recent if time.time() - ts < 25])
 
     def _on_speaking(self, active: bool) -> None:
         if self.audio:
@@ -412,6 +437,17 @@ class Jarvis(QObject):
                 time.sleep(0.4)
                 bus.mode.emit("hidden")
                 bus.state.emit("idle")
+        elif kind == "notify":
+            if self.session or (self.brain and self.brain.busy):
+                bus.status.emit(ev[1])  # en mitad de una conversación: solo se muestra
+                return
+            bus.mode.emit("corner")
+            bus.state.emit("speaking")
+            bus.status.emit("Notificación")
+            self._say_and_wait(ev[1])
+            # ventana breve para responder («léemelo») sin decir «Jarvis»
+            self.session = True
+            self._listen(6)
         elif kind == "say":
             show = not self.session
             if show:
@@ -517,7 +553,8 @@ class Jarvis(QObject):
         if settings["duck_media"]:
             from . import media
             threading.Thread(target=media.duck, daemon=True).start()
-        self.speaker.play_chime()
+        if source != "barge":
+            self.speaker.play_chime()
         if rest and (source == "typed" or len(rest.split()) >= 2):
             self._utterance(rest)
             return
