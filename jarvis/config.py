@@ -10,7 +10,7 @@ from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
 APP_NAME = "Jarvis"
-VERSION = "0.1.0"
+VERSION = "0.1.1"
 # Repositorio público de GitHub donde se publican las versiones ("usuario/repo").
 # Vacío = actualizaciones desactivadas.
 UPDATE_REPO = "Hidalgo611/jarvis-pablo"
