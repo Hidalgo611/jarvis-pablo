@@ -88,7 +88,9 @@ class Updater:
                 import win32api
                 win32api.CloseHandle(MUTEX)
                 MUTEX = None
-            subprocess.Popen([str(exe), "--after-update"], close_fds=True,
+            env = dict(os.environ)
+            env["PYINSTALLER_RESET_ENVIRONMENT"] = "1"  # que el .exe nuevo no herede la carpeta temporal del viejo
+            subprocess.Popen([str(exe), "--after-update"], close_fds=True, env=env,
                              creationflags=subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP)
             log.info("versión nueva lanzada; cerrando esta")
             bus.quit.emit()
