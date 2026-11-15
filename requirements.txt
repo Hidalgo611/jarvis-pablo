@@ -1,0 +1,17 @@
+PySide6-Essentials
+sounddevice
+numpy
+sherpa-onnx==1.13.8
+onnxruntime
+requests
+playwright
+python-docx
+fpdf2
+pyautogui
+psutil
+pywin32
+ddgs
+trafilatura
+pillow
+pycaw
+pyinstaller

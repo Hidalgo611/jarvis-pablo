@@ -1,0 +1,10 @@
+import sys, time; sys.path.insert(0,".")
+from jarvis import tools; tools.load_all()
+from jarvis.tools.browser import browser, youtube
+print(youtube("play", query="trailer iron man español")[:120])
+time.sleep(6)
+print(browser.call(lambda: browser.page.evaluate("()=>{const v=document.querySelector('video');return {url:location.href,t:v&&v.currentTime,paused:v&&v.paused,ad:!!document.querySelector('.ad-showing')}}")))
+print(youtube("quality_max")); time.sleep(1)
+print(browser.call(lambda: browser.page.evaluate("()=>{const m=document.getElementById('movie_player');return m&&m.getPlaybackQuality&&m.getPlaybackQuality()}")))
+print(youtube("seek", value=-5))
+from PIL import ImageGrab; ImageGrab.grab().resize((960,540)).save("dev/yt.png")
