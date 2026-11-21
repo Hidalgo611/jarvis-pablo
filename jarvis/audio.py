@@ -79,6 +79,13 @@ class AudioEngine(threading.Thread):
         self._seg_max = 0.0
         self._seed: tuple | None = None      # audio de la llamada «Jarvis, …» para empezar la orden
         self.paused = False
+        # interrumpir hablando: detector de «doble habla» (el usuario habla por encima de Jarvis)
+        self.speaker = None                  # lo pone app.py: da el volumen de lo que sale por el altavoz
+        self._echo: deque = deque(maxlen=150)  # relación micro/altavoz cuando solo habla Jarvis (eco de la sala)
+        self._dt = 0                         # bloques seguidos con doble habla
+        self._dt_last = 0.0
+        self._barge_tick = 0
+        self._duck_block = 0.0
 
     # ---------- API ----------
     def listen(self, timeout_s: float, on_partial, on_final, on_timeout) -> None:
@@ -175,14 +182,7 @@ class AudioEngine(threading.Thread):
             self._fire_wake("voice")
             return
         if self.tts_active:
-            # Interrumpir hablando: cada ~0,8 s con voz, reconoce los últimos 2 s y el conductor decide si es eco o el usuario
-            self._kw_tick += 1
-            if (settings["barge_in"] and now - self._last_speech < 0.4 and self._kw_tick >= 10 and not self._kw_busy
-                    and len(self.ring) >= 10):
-                self._kw_tick = 0
-                self._kw_busy = True
-                win = list(self.ring)[-25:]
-                self.asr_q.put(("barge", np.concatenate(win), win))
+            self._barge_step(chunk, speech, now)
             return
         if not settings["keyword_wake"]:
             return
@@ -194,6 +194,42 @@ class AudioEngine(threading.Thread):
             self._kw_busy = True
             win = list(self.ring)[-31:]
             self.asr_q.put(("kw", np.concatenate(win), win))
+
+    def echo_gain(self) -> float:
+        """Cuánto del altavoz vuelve al micro (percentil 70 de lo medido: robusto aunque a veces hable el usuario)."""
+        if len(self._echo) < 15:
+            return 0.8                       # aún sin medir: prudente
+        v = sorted(self._echo)
+        return v[int(len(v) * 0.7)]
+
+    def _barge_step(self, chunk: np.ndarray, speech: bool, now: float) -> None:
+        """Mientras Jarvis habla: ¿hay más voz en el micro de la que explica su propio eco? → baja su voz al instante
+        y el reconocedor confirma si es el usuario (para) o era ruido/eco (sigue)."""
+        if not settings["barge_in"] or self.speaker is None:
+            return
+        mic = float(np.sqrt(np.mean((chunk.astype(np.float32) / 32768.0) ** 2)))
+        ref = self.speaker.out_level(now - 0.4)
+        g = self.echo_gain()
+        double = speech and mic > max(0.01, 2.2 * g * ref + 0.004)
+        if ref > 0.01 and not double:
+            self._echo.append(min(4.0, mic / ref))
+        if double:
+            self._dt += 1
+            self._dt_last = now
+        elif now - self._dt_last > 0.25:
+            self._dt = 0
+        self._barge_tick += 1
+        if self._dt >= 2 and now > self._duck_block:
+            self.speaker.duck(0.3)           # reacción inmediata (~0,2 s): baja la voz mientras se confirma
+        elif self._dt == 0 and now - self._dt_last > 1.2 and self.speaker._target_gain != 1.0:
+            self.speaker.unduck()            # era ruido: vuelve a su volumen
+        # confirmación con el reconocedor: en cuanto hay ~0,4 s de doble habla, y luego cada ~0,5 s
+        want = (self._dt >= 5 and self._barge_tick >= 6) or (now - self._last_speech < 0.4 and self._barge_tick >= 12)
+        if want and not self._kw_busy and len(self.ring) >= 8:
+            self._barge_tick = 0
+            self._kw_busy = True
+            win = list(self.ring)[-20:]
+            self.asr_q.put(("barge", np.concatenate(win), win))
 
     def _listen_step(self, chunk: np.ndarray, speech: bool) -> None:
         deadline, on_partial, on_final, on_timeout = self._listen_cb
@@ -248,6 +284,10 @@ class AudioEngine(threading.Thread):
                         self._seed = (time.time(), job[2])
                         self.ring.clear()
                         self._fire_wake("barge", "")
+                    elif self.speaker is not None and self._dt < 5:
+                        # era eco o ruido: recupera el volumen y no vuelvas a bajarlo enseguida
+                        self.speaker.unduck()
+                        self._duck_block = time.time() + 1.5
                 elif kind == "kw" and self.mode == "wake":
                     text = self.asr(job[1])
                     if re.search(r"(j|y|h|ch|g|ll)ar|vis\b|bis\b", text, re.I):

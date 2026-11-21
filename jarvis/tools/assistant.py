@@ -25,11 +25,22 @@ def plan(steps: list) -> str:
     return "Plan mostrado. Ejecútalo paso a paso con las herramientas."
 
 
-@tool("remember", "Guarda en memoria a largo plazo un dato o preferencia del usuario (gustos, nombres, cómo quiere que le hables…).",
-      {"fact": S("Dato en una frase")}, ["fact"], label="Memorizando")
-def remember(fact: str) -> str:
-    memory.add_fact(fact)
-    return "Guardado en memoria."
+@tool("remember", "Guarda en memoria a largo plazo un dato o preferencia del usuario (gustos, nombres, trabajo, cómo quiere que le hables…). Si corrige o cambia un dato que ya sabías, pon el dato viejo en `replaces`.",
+      {"fact": S("Dato en una frase, en tercera persona (p. ej. «Trabaja en Mercadona»)"),
+       "replaces": S("Dato antiguo que este sustituye (si lo corrige), o vacío")}, ["fact"], label="Memorizando")
+def remember(fact: str, replaces: str = "") -> str:
+    fact = fact.strip()
+    if not fact:
+        return "No hay nada que guardar."
+    import re as _re
+    m = _re.search(r"\b(?:se llama|me llamo|su nombre es)\s+([A-ZÁÉÍÓÚÑ][a-záéíóúñ]+)", fact)
+    if m and _re.match(r"^\s*(el usuario|[ée]l|yo|pablo|" + _re.escape(settings["user_name"].lower()) + r")?\s*(se llama|me llamo|su nombre es)",
+                       fact, _re.I):
+        from ..brain import apply_name
+        apply_name("me llamo", m.group(1))
+        return f"Guardado: se llama {m.group(1)}."
+    n = memory.replace_fact(replaces, fact) if replaces else (memory.add_fact(fact) or 0)
+    return f"Guardado en memoria{' (y corregido el dato anterior)' if n else ''}."
 
 
 @tool("forget", "Olvida un dato guardado en memoria.", {"fact": S("Dato a olvidar")}, ["fact"], label="Olvidando")
@@ -66,26 +77,53 @@ def set_reminder(text: str, minutes: float | None = None, at: str | None = None)
     return f"Recordatorio para las {time.strftime('%H:%M', time.localtime(due))}: {text}"
 
 
-@tool("create_routine", "Crea una rutina: a una hora, al encender o con una frase, ejecuta acciones (herramientas existentes).",
-      {"name": S("Nombre corto"),
+def _norm_time(t: str | None) -> str | None:
+    """«9», «9:00», «09.30», «21h» → «09:00», «09:30», «21:00»."""
+    import re as _re
+    if not t:
+        return None
+    m = _re.search(r"(\d{1,2})(?:[:.h](\d{2}))?", str(t))
+    if not m:
+        return None
+    hh, mm = int(m.group(1)), int(m.group(2) or 0)
+    if hh > 23 or mm > 59:
+        return None
+    return f"{hh:02d}:{mm:02d}"
+
+
+@tool("create_routine", "Crea una automatización que Jarvis ejecutará él solo: a una hora (cada día, laborables, ciertos días), al encender el PC o cuando el usuario diga una frase. En `task` pon la orden en lenguaje natural tal como la diría el usuario (p. ej. «abre Gmail», «pon música lo-fi en YouTube», «dime el resumen del día»).",
+      {"name": S("Nombre corto (p. ej. «Gmail a las 9»)"),
        "trigger_type": S("Cuándo", ["time", "startup", "phrase"]),
+       "task": S("Qué hacer, como una orden hablada"),
        "time": S("HH:MM si es por hora"),
        "days": S("Días: 'todos', 'laborables', 'finde' o lista 'lun,mar'"),
        "phrase": S("Frase que la dispara, si es por frase"),
-       "actions": {"type": "array", "description": "Lista de acciones {tool, args}",
-                   "items": {"type": "object", "properties": {"tool": {"type": "string"}, "args": {"type": "object"}}}},
-       "announce": S("Lo que dirá Jarvis al ejecutarla")},
-      ["name", "trigger_type", "actions"], label=lambda a: f"Creando rutina «{a.get('name', '')}»")
-def create_routine(name: str, trigger_type: str, actions: list, time: str | None = None, days: str = "todos",
-                   phrase: str | None = None, announce: str = "") -> str:
+       "announce": S("Frase corta que dirá Jarvis al ejecutarla (opcional)")},
+      ["name", "trigger_type", "task"], label=lambda a: f"Creando rutina «{a.get('name', '')}»")
+def create_routine(name: str, trigger_type: str, task: str = "", time: str | None = None, days: str = "todos",
+                   phrase: str | None = None, announce: str = "", actions: list | None = None) -> str:
+    import time as _t
+    actions = [a for a in (actions or []) if isinstance(a, dict)]
     bad = [a.get("tool") for a in actions if a.get("tool") not in REGISTRY]
     if bad:
         return f"ERROR: herramientas inexistentes en la rutina: {bad}"
-    trig = {"type": trigger_type, "time": time, "days": days, "phrase": (phrase or "").lower()}
+    if not task.strip() and not actions:
+        return "ERROR: falta `task` (qué tiene que hacer la rutina)."
+    if trigger_type == "time":
+        time = _norm_time(time)
+        if not time:
+            return "ERROR: falta la hora (HH:MM). Pregúntale a qué hora la quiere."
+    if trigger_type == "phrase" and not (phrase or "").strip():
+        return "ERROR: falta la frase que la dispara."
+    if task.strip():
+        actions.append({"task": task.strip()})
+    trig = {"type": trigger_type, "time": time, "days": days or "todos", "phrase": (phrase or "").lower().strip(" .,!¡¿?")}
     memory.q("INSERT INTO routines(name, trigger, actions, ts) VALUES(?,?,?,?)",
              (name, json.dumps(trig, ensure_ascii=False), json.dumps({"actions": actions, "announce": announce}, ensure_ascii=False),
-              __import__("time").time()))
-    return f"Rutina «{name}» creada."
+              _t.time()))
+    when = {"time": f"a las {time} ({days or 'todos'} los días)" if (days or "todos") == "todos" else f"a las {time} ({days})",
+            "startup": "al encender el ordenador", "phrase": f"cuando digas «{phrase}»"}.get(trigger_type, "")
+    return f"Rutina «{name}» creada: se ejecutará {when}."
 
 
 @tool("list_routines", "Lista las rutinas automáticas.", {}, [], label="Revisando rutinas")
@@ -93,7 +131,13 @@ def list_routines() -> str:
     rows = memory.q("SELECT id, name, trigger, enabled FROM routines")
     if not rows:
         return "No hay rutinas."
-    return "\n".join(f"{r[0]}. {r[1]} — {r[2]} {'(activa)' if r[3] else '(desactivada)'}" for r in rows)
+    out = []
+    for rid, name, trig, en in rows:
+        t = json.loads(trig)
+        when = {"time": f"a las {t.get('time')} ({t.get('days') or 'todos'})", "startup": "al encender",
+                "phrase": f"al decir «{t.get('phrase')}»"}.get(t.get("type"), "")
+        out.append(f"{rid}. {name} — {when} {'(activa)' if en else '(desactivada)'}")
+    return "\n".join(out)
 
 
 @tool("delete_routine", "Borra o desactiva una rutina por su nombre.", {"name": S("Nombre de la rutina")}, ["name"],

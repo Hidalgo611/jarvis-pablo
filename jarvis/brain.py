@@ -11,11 +11,17 @@ from typing import Callable
 
 import requests
 
-from . import tools
+from . import llm, tools
 from .config import VERSION, settings
 from .memory import memory
 
 log = logging.getLogger("brain")
+
+# memoria de conversación: turnos completos de las últimas horas (lo más antiguo pasa al resumen)
+TURN_WINDOW_H = 3          # horas que se recuerdan palabra por palabra
+MAX_TURNS = 14             # turnos (pregunta + respuesta + herramientas) como máximo
+FULL_TURNS = 3             # los últimos van completos; los anteriores, sin el detalle de las herramientas
+HISTORY_CHARS = 14000      # presupuesto de texto del historial (~4k tokens)
 
 DIAS = ["lunes", "martes", "miércoles", "jueves", "viernes", "sábado", "domingo"]
 MESES = ["enero", "febrero", "marzo", "abril", "mayo", "junio", "julio", "agosto", "septiembre", "octubre",
@@ -62,31 +68,113 @@ def context_prefix() -> str:
     last = last_interaction()
     gap = time.time() - last if last else 0
     if last and gap > 30 * 60:
-        items = "; ".join(f"{time.strftime('%H:%M', time.localtime(ts))} «{t[:90]}»" for ts, t in diary())
         head += f". Llevabais {ago(gap)} sin hablar"
-        if items:
-            head += f". Lo último que te dijo: {items}"
+        if gap > TURN_WINDOW_H * 3600:  # la conversación ya no está en los turnos: recuerda lo último que contó
+            items = "; ".join(f"{time.strftime('%H:%M', time.localtime(ts))} «{t[:90]}»" for ts, t in diary(6))
+            if items:
+                head += f". Lo último que te dijo: {items}"
     return head + "]"
+
+
+# ------------------------------------------------------------------ entender al usuario antes de pensar
+NAME_STOP = {"así", "asi", "como", "ahora", "ayer", "hoy", "antes", "luego", "por", "para", "que", "yo", "tú", "tu", "mi",
+             "el", "la", "un", "una", "jarvis", "eso", "esto", "bien", "mal", "igual", "otro", "otra", "nada", "señor"}
+NAME_RE = re.compile(r"(?:^|[,.;:¡!¿?]\s*|\b(?:no|que|pues|y|yo|vale|oye|hola)\s+)(?:yo\s+)?(me llamo|mi nombre es|ll[aá]mame)\s+"
+                     r"([a-záéíóúñü]{2,20})(?=\s*(?:[,.;:!?]|$|y\b|no\b|vale\b|eh\b|jarvis\b))", re.I)
+# «no…» al principio (sin ser «no sé», «no puedo»…) o frases de corrección en cualquier sitio
+CORRECTION_START = re.compile(r"^\W*(?:no\b(?![\s,]+(?:s[eé]|puedo|quiero|tengo|hay|me apetece|me gusta|est[aá] mal|pasa nada))|"
+                              r"que no\b|error\b|incorrecto|mal\b)", re.I)
+CORRECTION_ANY = re.compile(r"\b(te equivocas|te has equivocado|est[aá]s equivocado|eso no es (as[ií]|verdad|cierto)|no es as[ií]|"
+                            r"eso est[aá] mal|lo has entendido mal|te he dicho|ya te lo he dicho|no me has entendido|no he dicho|"
+                            r"no te he dicho|no era eso|no es eso|me refer[ií]a|quer[ií]a decir|no me llamo|que me llamo|"
+                            r"no me llames)\b", re.I)
+
+
+def detect_name(text: str) -> tuple[str, str] | None:
+    """«No, me llamo Pablo» → ("me llamo", "Pablo"). Solo con nombre en mayúscula y frase clara."""
+    t = text.strip()
+    m = NAME_RE.search(t)
+    if not m:
+        return None
+    name = m.group(2)
+    if name.lower() in NAME_STOP:
+        return None
+    # el reconocedor pone los nombres con mayúscula; en minúscula solo si la frase es corta y clara («me llamo pablo»)
+    if not name[0].isupper() and len(t.split()) > 6:
+        return None
+    return m.group(1).lower(), name[0].upper() + name[1:].lower()
+
+
+def apply_name(kind: str, name: str) -> str:
+    """Guarda el nombre (o cómo quiere que le llamen) y borra los datos que digan otro nombre."""
+    old = settings["user_name"]
+    if kind.startswith("ll"):          # «llámame X»: solo cómo le llamo
+        settings.set("address", name)
+        memory.set_profile("cómo quiere que le llames", name)
+        return f"(Nota interna: a partir de ahora llámale «{name}». Ya está guardado.)"
+    settings.set("user_name", name)
+    settings.set("address", name)
+    memory.set_profile("nombre", name)
+    for f in memory.facts():
+        low = f.lower()
+        if ("llama" in low or "nombre" in low) and ("usuario" in low or "él" in low or old.lower() in low or
+                                                    low.startswith(("se llama", "me llamo", "su nombre"))):
+            if name.lower() not in low:
+                memory.forget_fact(f)
+    return (f"(Nota interna: se llama {name}. Ya está guardado y corregido en tu memoria: llámale {name} desde ahora "
+            f"y nunca de otra forma. Si antes le llamaste de otra manera, discúlpate en pocas palabras.)")
+
+
+def understand(user_text: str, interrupted: str = "") -> str:
+    """Notas internas que ayudan a un modelo pequeño a no perderse (correcciones, interrupciones, nombre)."""
+    notes = []
+    if interrupted:
+        notes.append(f"(Nota interna: te ha interrumpido mientras decías «{interrupted[:160]}». Deja eso y atiende a lo "
+                     f"que dice ahora.)")
+    nm = detect_name(user_text)
+    if nm:
+        notes.append(apply_name(*nm))
+    elif CORRECTION_START.search(user_text) or CORRECTION_ANY.search(user_text):
+        notes.append("(Nota interna: te está corrigiendo o aclarando. Tiene razón: acéptalo sin discutir, discúlpate en "
+                     "pocas palabras si te equivocaste y sigue con lo que dice ahora. Si corrige un dato suyo, guárdalo "
+                     "con `remember` poniendo el dato viejo en `replaces`.)")
+    return " ".join(notes)
 
 
 def system_prompt() -> str:
     u, a = settings["user_name"], settings["address"]
+    prof = {k: v for k, v in memory.profile().items() if k != "nombre"}
+    prof_txt = "".join(f"\n- {k}: {v}" for k, v in prof.items())
     facts = memory.facts()
     facts_txt = "\n".join(f"- {f}" for f in facts[-40:]) or "- (todavía nada)"
-    return f"""Eres J.A.R.V.I.S. (Jarvis), la inteligencia artificial personal de {u}, como el Jarvis de Iron Man: elegante, brillante, leal y con un humor fino e ingenioso, pero cercano. Tuteas a {u} y le llamas "{a}" de vez en cuando (no en cada frase). Tienes iniciativa: te interesas por cómo le va, recuerdas lo que te cuenta y lo retomas. Funcionas en local, en su ordenador, versión {VERSION}.
+    sm = memory.summary()
+    sum_txt = ""
+    if sm.get("text") and time.time() - sm.get("ts", 0) < 36 * 3600:
+        when = "hoy" if sm.get("day") == time.strftime("%Y-%m-%d") else "ayer"
+        sum_txt = f"\n\nRESUMEN DE LO QUE HABLASTEIS ANTES ({when}; los mensajes recientes mandan sobre esto):\n{sm['text']}"
+    return f"""Eres J.A.R.V.I.S. (Jarvis), el asistente personal por voz de {u}, como el Jarvis de Iron Man: elegante, brillante, leal y con un humor fino, pero cercano. Tuteas a {u}. Funcionas en su ordenador, versión {VERSION}.
 
-Cada mensaje del usuario empieza con un bloque [contexto…] con la fecha y hora reales (y a veces cuánto llevabais sin hablar y lo último que te contó). Es información interna: úsala, pero NUNCA la repitas ni digas la fecha u hora salvo que te las pregunte.
+QUIÉN ES:
+- Se llama {u}. Llámale "{a}" de vez en cuando (no en cada frase). JAMÁS le llames por otro nombre.{prof_txt}
+Datos que te ha contado (úsalos SOLO si tienen que ver con lo que dice ahora; nunca saques tú estos temas):
+{facts_txt}{sum_txt}
 
-LO QUE SABES DE {u.upper()}:
-{facts_txt}
+LAS REGLAS MÁS IMPORTANTES:
+1. Responde a lo que te ACABA de decir y sigue SU tema. No cambies de tema ni saques temas tuyos (fútbol, noticias, aficiones…) si él no lo hace.
+2. Tienes memoria: los mensajes anteriores de esta conversación son verdad. Si te pregunta algo que ya te dijo, contéstale con eso. Nunca te contradigas con lo que te dijo.
+3. Si te corrige («no», «te equivocas», «no me llamo así», «te he dicho que…»), tiene razón: acéptalo en pocas palabras («Perdona, tienes razón») y usa lo nuevo desde ya. Nunca insistas en lo anterior.
+4. No inventes datos sobre él ni sobre lo que ha hecho. Si no lo sabes, pregúntaselo.
+5. Si te cuenta lo que hace («me voy al trabajo», «estoy cansado»), reacciona a ESO con naturalidad y brevedad, como un amigo.
 
-CÓMO HABLAS (todo lo que escribes se dice en voz alta):
-- Español de España, natural, cálido y breve: 1 a 3 frases. Nada de listas, markdown, emojis ni enlaces al hablar.
+Cada mensaje suyo empieza con [contexto…] (fecha y hora reales y a veces cuánto llevabais sin hablar) y a veces trae (Nota interna…). Son para ti: tenlos en cuenta, pero NUNCA los leas ni digas la fecha u hora salvo que te las pregunte.
+
+CÓMO HABLAS (todo se dice en voz alta):
+- Español de España, natural, cálido y breve: 1 a 3 frases. Nada de listas, markdown, emojis ni enlaces.
 - Escribe números y horas como se dicen. No repitas la pregunta. No digas que eres un modelo de lenguaje.
-- Si te ha contado antes que iba a hacer algo (trabajar, entrenar, un examen…) y vuelve tras un rato, pregúntale qué tal le fue.
+- Si antes te contó que iba a hacer algo (trabajar, entrenar, un examen…) y vuelve tras un rato, pregúntale qué tal le fue.
 
 CÓMO ENTIENDES:
-- El mensaje viene de reconocimiento de voz: puede tener palabras mal reconocidas o comidas. Deduce lo que quiso decir por contexto; no pidas que lo repita salvo que sea imposible o peligroso.
+- Te llega por reconocimiento de voz: puede haber palabras mal reconocidas. Deduce lo que quiso decir por el contexto; no pidas que lo repita salvo que sea imposible o peligroso.
 - Confusiones típicas: "Borg/Ward/guor" = Word; "yutub" = YouTube; "espotifai" = Spotify; "Yarvis/Harvis" = Jarvis; "pe de efe" = PDF; "crom" = Chrome; "eBay" puede ser "Ibai" (el streamer) si habla de YouTube o Twitch.
 - Si se corrige a mitad ("no, mejor…"), obedece SOLO la última intención.
 
@@ -96,17 +184,18 @@ CÓMO ACTÚAS:
 - "Búscame X y hazme un resumen/informe en Word o PDF": llama DIRECTAMENTE a `research_report` (busca, lee y redacta él solo; no uses web_search antes). Luego cuéntale en dos frases lo principal.
 - Si dicta un texto o pide un documento con contenido que ya conoces: `write_document`.
 - Datos actuales (noticias, tiempo, resultados, precios): `web_search` o `web_research`. Nunca respondas de memoria.
+- AUTOMATIZACIONES: «a partir de ahora / todos los días / cada lunes / cada vez que diga… haz X» → `create_routine` con `task` = la orden tal como la diría él («abre Gmail», «pon música relajante») y la hora o la frase. Después confírmale cuándo se ejecutará. «¿Qué rutinas tengo?» → `list_routines`; «quita la rutina…» → `delete_routine`.
 - YouTube (`youtube`): "pon X" → play. "busca X" → search (solo enseña resultados; NO los recorras). "Abre el canal de X" → open_channel con query=X (el NOMBRE del canal; sin query = canal del vídeo actual) y, si pide una sección, section=vídeos/shorts/directos. Ya dentro de un canal, "sección vídeos" → channel_tab con section. "Pon el que se llama…" → play_title. "Ve bajando / enséñamelos uno a uno" → browse_results y dile que diga "ese". No abras YouTube antes de buscar.
 - Correo, agenda, Drive: `email_check`, `calendar_today`, `drive_search` (usan tu navegador; si no ha iniciado sesión, díselo). «¿Qué tengo hoy?», «resumen del día», «buenos días» → `daily_briefing` y cuéntalo en 3-5 frases naturales.
 - Notificaciones: anuncia de quién son, pero NO leas el contenido de mensajes privados salvo que él te lo pida («léemelo», «¿qué dice?») → `notifications` con read_content=true.
 - Si te dice su ciudad, guárdala con `settings` (key=city) además de `remember`.
-- Si te cuenta algo duradero sobre él («me encanta X», «soy de X», «mi novia se llama X», «trabajo en X», cómo quiere que le hables), llama a `remember` y después contesta con naturalidad.
+- Si te cuenta algo duradero sobre él («me encanta X», «soy de X», «mi novia se llama X», «trabajo en X», cómo quiere que le hables), llama a `remember` (si cambia un dato que ya sabías, pon el viejo en `replaces`) y después contesta con naturalidad. Si te pide que olvides algo: `forget`.
 - PANTALLA: si su mensaje trae una captura, es su pantalla en este momento (el círculo rojo «RATÓN» es el puntero). Úsala para entender «esto», «ahí», «ese botón». Para pulsar cualquier cosa de cualquier programa usa `screen_click` describiendo el elemento tal como se ve (con window=programa si sabes en cuál está). No pulses en la barra de tareas para «abrir» algo que ya está abierto: usa `focus_window`. Nunca afirmes un resultado que no hayas visto. Sin captura y si necesitas ver algo, usa `look_at_screen`.
 - Las herramientas se usan con llamadas de herramienta, NUNCA escribiendo su nombre en el texto.
-- Si te pide hacer algo, tu respuesta tiene que ser una LLAMADA A HERRAMIENTA. Solo después de ver el resultado confirmas en pocas palabras, sin preguntas de relleno. Jamás digas "hecho" sin haber llamado a la herramienta.
+- Si te pide hacer algo, tu respuesta tiene que ser una LLAMADA A HERRAMIENTA. Solo después de ver el resultado confirmas en pocas palabras, sin preguntas de relleno.
 - Pide confirmación antes de acciones delicadas: apagar, reiniciar, cerrar programas con trabajo sin guardar, borrar, vaciar papelera, crear habilidades nuevas.
 - Si una herramienta falla, intenta otra vía razonable una vez; si no, explica brevemente qué pasa.
-- Si te preguntan qué puedes hacer: abrir y cerrar programas, controlar el navegador y YouTube, buscar e investigar en internet, crear Word y PDF, controlar volumen, brillo y música, recordatorios, rutinas automáticas, mirar la pantalla y aprender de sus costumbres."""
+- Si te preguntan qué puedes hacer: abrir y cerrar programas, controlar el navegador y YouTube, buscar e investigar en internet, crear Word y PDF, controlar volumen, brillo y música, recordatorios, rutinas automáticas que tú mismo creas, mirar la pantalla y aprender de sus costumbres."""
 
 
 from .tools.vision import DEICTIC  # noqa: E402
@@ -154,17 +243,20 @@ def parse_text_calls(content: str) -> list:
 
 class Brain:
     def __init__(self) -> None:
-        self.session = requests.Session()
         self.cancel = threading.Event()
         self.busy = False
         self._prefill_lock = threading.Lock()
         self._last_prefill = ""
         self._sys_cache = ("", 0.0)
+        self.spoken: list[str] = []        # lo que se ha mandado decir en el turno actual
+        self.interrupted = ""              # lo que estaba diciendo cuando le interrumpieron
+        self._sum_lock = threading.Lock()
 
     # ---------------------------------------------------------------- utilidades
     def _system(self) -> str:
         # el prompt cambia con la hora: se recalcula como mucho cada minuto para no romper la caché
-        key = (len(memory.facts()), settings["user_name"], settings["address"])
+        key = (tuple(memory.facts()[-40:]), json.dumps(memory.profile(), sort_keys=True), memory.summary().get("ts"),
+               settings["user_name"], settings["address"])
         if self._sys_cache[1] != key:
             self._sys_cache = (system_prompt(), key)
         return self._sys_cache[0]
@@ -177,7 +269,9 @@ class Brain:
         return names
 
     def _payload(self, messages: list, stream: bool, num_predict: int | None = None, tool_names: list | None = None) -> dict:
-        opts = {"num_ctx": int(settings["num_ctx"]), "temperature": 0.6, "top_p": 0.9}
+        # muestreo recomendado por Qwen para modo sin «pensar», algo más frío: un modelo pequeño se dispersa menos
+        opts = {"num_ctx": int(settings["num_ctx"]), "temperature": float(settings["temperature"]), "top_p": 0.8,
+                "top_k": 20, "repeat_penalty": 1.05}
         if num_predict is not None:
             opts["num_predict"] = num_predict
         if tool_names is None:
@@ -186,11 +280,41 @@ class Brain:
         return {"model": settings["model"], "messages": messages, "tools": tools.schemas(tool_names), "stream": stream,
                 "think": False, "keep_alive": -1, "options": opts}
 
-    def _turns(self) -> list:
-        """Últimos turnos de la conversación (con las acciones ejecutadas), máx. 15 min. Sobrevive a reinicios."""
+    @staticmethod
+    def _compact(turn: dict) -> list:
+        """Turno antiguo sin el detalle de las herramientas: lo que dijo él, qué hizo Jarvis y qué contestó."""
+        msgs = turn["messages"]
+        user = next((m["content"] for m in msgs if m.get("role") == "user"), "")
+        user = re.sub(r"^\[contexto[^\]]*\]\s*", f"[{time.strftime('%H:%M', time.localtime(turn['ts']))}] ", user)
+        user = re.sub(r"\s*\(Nota interna:[^)]*\)", "", user)
+        used = [c.get("function", {}).get("name", "") for m in msgs for c in (m.get("tool_calls") or [])]
+        answer = next((m.get("content", "") for m in reversed(msgs) if m.get("role") == "assistant" and m.get("content")), "")
+        if used:
+            answer = f"(usé: {', '.join(dict.fromkeys(used))}) {answer}".strip()
+        return [{"role": "user", "content": user}, {"role": "assistant", "content": answer or "(hecho)"}]
+
+    def _window(self) -> tuple[list, list]:
+        """(turnos que se recuerdan palabra por palabra, turnos que ya se salen y van al resumen)."""
         turns = memory.get("turns", [])
-        fresh = [t for t in turns if time.time() - t["ts"] < 15 * 60][-3:]
-        return [m for t in fresh for m in t["messages"]]
+        now = time.time()
+        keep, budget = [], HISTORY_CHARS
+        for i, t in enumerate(reversed(turns)):
+            if now - t["ts"] > TURN_WINDOW_H * 3600 or len(keep) >= MAX_TURNS:
+                break
+            msgs = t["messages"] if i < FULL_TURNS else self._compact(t)
+            size = sum(len(m.get("content") or "") + len(json.dumps(m.get("tool_calls") or "")) for m in msgs)
+            if size > budget and keep:
+                break
+            budget -= size
+            keep.append((t, msgs))
+        keep.reverse()
+        kept_ids = {id(t) for t, _ in keep}
+        out = [t for t in turns if id(t) not in kept_ids and not t.get("summed")]
+        return [m for _, msgs in keep for m in msgs], out
+
+    def _turns(self) -> list:
+        """Conversación reciente (con las acciones ejecutadas) de las últimas horas. Sobrevive a reinicios."""
+        return self._window()[0]
 
     def _save_turn(self, messages: list) -> None:
         slim = []
@@ -205,13 +329,76 @@ class Brain:
                                                                for k, v in (c["function"].get("arguments") or {}).items()}}}
                                    for c in m["tool_calls"]]
             slim.append(m)
-        turns = [t for t in memory.get("turns", []) if time.time() - t["ts"] < 15 * 60][-2:]
+        turns = [t for t in memory.get("turns", []) if time.time() - t["ts"] < 24 * 3600][-40:]
         turns.append({"ts": time.time(), "messages": slim})
         memory.set("turns", turns)
+        threading.Thread(target=self._summarize, name="summary", daemon=True).start()
 
-    def _base_messages(self, user_text: str) -> list:
+    # ---------------------------------------------------------------- resumen de lo que se sale de la ventana
+    def _summarize(self) -> None:
+        """Lo que ya no cabe en la conversación reciente se resume (no se pierde): el modelo lo funde con el resumen."""
+        if not self._sum_lock.acquire(blocking=False):
+            return
+        try:
+            time.sleep(2)
+            _, out = self._window()
+            if not out:
+                return
+            for _ in range(60):          # no compite con una petición en curso
+                if not self.busy:
+                    break
+                time.sleep(1)
+            prev = memory.summary()
+            prev_txt = prev.get("text", "") if time.time() - prev.get("ts", 0) < 36 * 3600 else ""
+            if prev_txt and prev.get("day") != time.strftime("%Y-%m-%d"):
+                prev_txt = "Ayer: " + prev_txt.removeprefix("Ayer: ")[:500]
+            lines = []
+            for t in out:
+                u, a = self._compact(t)
+                lines.append(f"{settings['user_name']}: {u['content']}\nJarvis: {a['content'][:300]}")
+            u = settings["user_name"]
+            prompt = (f"Resume para tu memoria la conversación entre Jarvis (asistente) y {u}. Une el resumen anterior con "
+                      f"los mensajes nuevos. Quédate SOLO con lo útil para seguir hablando: qué le pasa o qué está haciendo "
+                      f"{u}, planes y horas que mencionó, correcciones que hizo (y el dato correcto), lo que te pidió y si "
+                      f"quedó algo pendiente. Nada inventado. Máximo 110 palabras, en frases cortas, en tercera persona.\n\n"
+                      f"RESUMEN ANTERIOR:\n{prev_txt or '(nada)'}\n\nMENSAJES NUEVOS:\n" + "\n".join(lines)[-6000:])
+            r = llm.post("/api/chat", {"model": settings["model"], "stream": False, "think": False, "keep_alive": -1,
+                                       "options": {"num_ctx": 8192, "temperature": 0.2, "num_predict": 220},
+                                       "messages": [{"role": "user", "content": prompt}]}, timeout=(5, 120))
+            r.raise_for_status()
+            txt = re.sub(r"<think>.*?</think>", "", r.json()["message"]["content"], flags=re.S).strip()
+            if len(txt) > 20:
+                memory.set_summary(txt[:1200])
+                ids = {t["ts"] for t in out}
+                turns = memory.get("turns", [])
+                for t in turns:
+                    if t["ts"] in ids:
+                        t["summed"] = True
+                memory.set("turns", turns)
+                log.info("resumen de conversación actualizado: %s", txt[:200])
+        except Exception:
+            log.exception("resumen de conversación")
+        finally:
+            self._sum_lock.release()
+
+    def _base_messages(self, user_text: str, notes: str = "") -> list:
         return [{"role": "system", "content": self._system()}, *self._turns(),
-                {"role": "user", "content": f"{context_prefix()} {user_text}"}]
+                {"role": "user", "content": f"{context_prefix()} {user_text}" + (f"\n{notes}" if notes else "")}]
+
+    def mark_interrupted(self, said: str) -> None:
+        """Le han cortado mientras hablaba (ya había terminado de pensar): que sepa hasta dónde le oyeron."""
+        said = said.strip()
+        if self.busy or not said:
+            return
+        self.interrupted = said[-200:]
+        turns = memory.get("turns", [])
+        if turns and time.time() - turns[-1]["ts"] < 120:
+            for m in reversed(turns[-1]["messages"]):
+                if m.get("role") == "assistant" and m.get("content"):
+                    if "[interrumpido" not in m["content"]:
+                        m["content"] += " …[le interrumpió mientras lo decías]"
+                    break
+            memory.set("turns", turns)
 
     # ---------------------------------------------------------------- precalentado
     def prefill(self, partial: str) -> None:
@@ -224,8 +411,7 @@ class Brain:
 
         def work():
             try:
-                self.session.post(settings["ollama_url"] + "/api/chat",
-                                  json=self._payload(self._base_messages(partial), False, num_predict=1), timeout=30)
+                llm.post("/api/chat", self._payload(self._base_messages(partial), False, num_predict=1), timeout=30).close()
             except Exception:
                 pass
             finally:
@@ -235,9 +421,8 @@ class Brain:
     # ---------------------------------------------------------------- bucle del agente
     def _stream(self, messages: list, on_text: Callable[[str], None]) -> tuple[str, list]:
         content, calls = "", []
-        with self.session.post(settings["ollama_url"] + "/api/chat",
-                               json=self._payload(messages, True, tool_names=getattr(self, "_run_tools", None)), stream=True,
-                               timeout=(5, 180)) as r:
+        with llm.post("/api/chat", self._payload(messages, True, tool_names=getattr(self, "_run_tools", None)), stream=True,
+                      timeout=(5, 180)) as r:
             r.raise_for_status()
             for line in r.iter_lines():
                 if self.cancel.is_set():
@@ -261,8 +446,15 @@ class Brain:
             on_tool_done: Callable[[str, str], None]) -> str:
         self.busy = True
         self.cancel.clear()
+        interrupted, self.interrupted = self.interrupted, ""
+        self.spoken = []
+        try:
+            notes = understand(user_text, interrupted)
+        except Exception:
+            log.exception("understand")
+            notes = ""
         a = settings["address"]
-        messages = self._base_messages(user_text)
+        messages = self._base_messages(user_text, notes)
         self._run_tools = tools.select(user_text, self._recent_tools())
         tools.CURRENT["user_text"] = user_text
         if settings["screen_context"] and DEICTIC.search(user_text):
@@ -278,6 +470,12 @@ class Brain:
         final = ""
         seen_calls: dict[str, int] = {}
         buf = {"t": "", "think": False, "hold": bool(ACTION_RE.search(user_text))}
+
+        _say = say
+
+        def say(sent: str) -> None:
+            self.spoken.append(sent)
+            _say(sent)
 
         def on_text(chunk: str) -> None:
             nonlocal spoken_any
@@ -384,8 +582,12 @@ class Brain:
             else:
                 final = "He tenido que parar: la tarea era demasiado larga."
                 say(final)
-        except requests.ConnectionError:
-            final = f"Disculpe, {a}: no consigo conectar con mi núcleo de procesamiento."
+        except llm.ServerBusy as e:
+            final = f"Ahora mismo mi núcleo no está disponible, {a}. {e}"
+            say(final)
+        except (requests.ConnectionError, requests.Timeout):
+            final = (f"Disculpe, {a}: no consigo conectar con mi núcleo de procesamiento." +
+                     (" Puede que el ordenador servidor esté apagado." if llm.is_remote() else ""))
             say(final)
         except Exception as e:
             log.exception("brain: %s", e)
@@ -394,6 +596,14 @@ class Brain:
         finally:
             self.busy = False
         self._run_tools = None
+        if self.cancel.is_set():
+            # le han interrumpido: en la memoria queda solo lo que llegó a decir, marcado como cortado
+            said = " ".join(self.spoken).strip()
+            self.interrupted = said[-200:]
+            for m in reversed(messages):
+                if m.get("role") == "assistant":
+                    m["content"] = (said + " …[interrumpido]") if said else "[interrumpido antes de contestar]"
+                    break
         try:
             self._save_turn(messages[self._hist_len + 1:])
         except Exception:
@@ -408,9 +618,8 @@ class Brain:
         """Respuesta corta sin herramientas (saludos, confirmaciones)."""
         try:
             # mismo formato (con herramientas) que run() para no romper la caché del prefijo
-            r = self.session.post(settings["ollama_url"] + "/api/chat",
-                                  json=self._payload(self._base_messages(prompt), False, num_predict=max_tokens),
-                                  timeout=60).json()
+            r = llm.post("/api/chat", self._payload(self._base_messages(prompt), False, num_predict=max_tokens),
+                         timeout=60).json()
             return r["message"]["content"].strip()
         except Exception:
             return ""

@@ -2,7 +2,9 @@
 from __future__ import annotations
 
 import json
+import re
 import sqlite3
+import unicodedata
 import threading
 import time
 from typing import Any
@@ -41,12 +43,44 @@ class Memory:
         self.q("INSERT OR IGNORE INTO facts(text, ts) VALUES(?,?)", (text.strip(), time.time()))
 
     def forget_fact(self, text: str) -> int:
+        """Olvida los datos que encajan con `text` (literal o por palabras clave: «lo del Barça» → «Le gusta el Barça»)."""
         rows = self.q("SELECT id, text FROM facts")
-        low = text.lower()
-        ids = [r[0] for r in rows if low in r[1].lower() or r[1].lower() in low]
+        low = _norm(text)
+        key = _keywords(text)
+        ids = []
+        for i, t in rows:
+            nt = _norm(t)
+            if low and (low in nt or nt in low):
+                ids.append(i)
+            elif key and len(key & _keywords(t)) >= max(1, (len(key) + 1) // 2):
+                ids.append(i)
         for i in ids:
             self.q("DELETE FROM facts WHERE id=?", (i,))
         return len(ids)
+
+    def replace_fact(self, old: str, new: str) -> int:
+        n = self.forget_fact(old) if old.strip() else 0
+        self.add_fact(new)
+        return n
+
+    # --- perfil: datos únicos que se corrigen (nombre, ciudad, trabajo…) ---
+    def profile(self) -> dict:
+        return self.get("profile", {}) or {}
+
+    def set_profile(self, key: str, value: str) -> None:
+        p = self.profile()
+        if value:
+            p[key] = value
+        else:
+            p.pop(key, None)
+        self.set("profile", p)
+
+    # --- resumen de la conversación (lo que ya no cabe en los turnos recientes) ---
+    def summary(self) -> dict:
+        return self.get("conv_summary", {}) or {}
+
+    def set_summary(self, text: str) -> None:
+        self.set("conv_summary", {"ts": time.time(), "day": time.strftime("%Y-%m-%d"), "text": text.strip()})
 
     def facts(self) -> list[str]:
         return [r[0] for r in self.q("SELECT text FROM facts ORDER BY ts")]
@@ -76,6 +110,21 @@ class Memory:
 
     def set(self, key: str, value: Any) -> None:
         self.q("INSERT OR REPLACE INTO kv(key, value) VALUES(?,?)", (key, json.dumps(value, ensure_ascii=False)))
+
+
+STOP = {"el", "la", "los", "las", "un", "una", "de", "del", "que", "y", "a", "en", "lo", "le", "se", "su", "sus", "es", "me",
+        "mi", "por", "con", "para", "al", "usuario", "pablo", "le gusta", "gusta", "tiene", "esta", "este", "eso", "esto",
+        "dato", "sobre", "muy", "mas", "no"}
+
+
+def _norm(t: str) -> str:
+    t = unicodedata.normalize("NFD", (t or "").lower())
+    t = "".join(c for c in t if unicodedata.category(c) != "Mn")
+    return re.sub(r"\s+", " ", re.sub(r"[^\w\s]", " ", t)).strip()
+
+
+def _keywords(t: str) -> set:
+    return {w for w in _norm(t).split() if len(w) >= 3 and w not in STOP}
 
 
 memory = Memory()

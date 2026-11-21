@@ -80,7 +80,7 @@ def ensure_models() -> None:
 # ------------------------------------------------------------- Ollama
 def ollama_up(url: str | None = None) -> bool:
     try:
-        return requests.get((url or settings["ollama_url"]) + "/api/version", timeout=2).ok
+        return requests.get((url or settings["ollama_url"]) + "/api/version", timeout=2, headers=_h()).ok
     except Exception:
         return False
 
@@ -106,7 +106,11 @@ def ensure_ollama() -> None:
     if ollama_up(url):
         return
     if "127.0.0.1" not in url and "localhost" not in url:
-        raise RuntimeError(f"El servidor de IA remoto ({url}) no responde.")
+        fb = (settings.get("fallback_url") or "").strip()
+        if fb and ollama_up(fb):
+            log.warning("servidor remoto %s sin respuesta; arranco con el respaldo %s", url, fb)
+            return
+        raise RuntimeError(f"El servidor de IA ({url}) no responde. ¿Está encendido el ordenador servidor?")
     exe = _ollama_exe()
     if not exe:
         inst = Path(tempfile.gettempdir()) / "OllamaSetup.exe"
@@ -148,14 +152,14 @@ def pick_model() -> str:
 
 def installed_models() -> set[str]:
     try:
-        r = requests.get(settings["ollama_url"] + "/api/tags", timeout=5).json()
+        r = requests.get(settings["ollama_url"] + "/api/tags", headers=_h(), timeout=5).json()
         return {m["name"] for m in r.get("models", [])}
     except Exception:
         return set()
 
 
 def pull(model: str, label: str) -> None:
-    with requests.post(settings["ollama_url"] + "/api/pull", json={"model": model, "stream": True}, stream=True,
+    with requests.post(settings["ollama_url"] + "/api/pull", headers=_h(), json={"model": model, "stream": True}, stream=True,
                        timeout=(10, 600)) as r:
         r.raise_for_status()
         for line in r.iter_lines():
@@ -169,7 +173,19 @@ def pull(model: str, label: str) -> None:
                                   f"Descargando {label}  {d.get('completed', 0) / 2**30:.1f} / {d['total'] / 2**30:.1f} GB")
 
 
+def _h() -> dict:
+    from .llm import headers
+    return headers()
+
+
 def ensure_llm() -> None:
+    from .llm import is_remote
+    if is_remote():
+        # el cerebro vive en el PC-servidor: allí se descargan y gestionan los modelos (server/README)
+        settings.set("model_chosen", True)
+        if settings["model"] not in installed_models():
+            log.warning("el servidor remoto no tiene %s; uso lo que tenga", settings["model"])
+        return
     have = installed_models()
     if not settings.get("model_chosen"):
         settings.set("model", pick_model())
@@ -181,7 +197,7 @@ def ensure_llm() -> None:
     for old in settings.get("cleanup_models") or []:
         if old != m:
             try:
-                requests.delete(settings["ollama_url"] + "/api/delete", json={"model": old}, timeout=30)
+                requests.delete(settings["ollama_url"] + "/api/delete", headers=_h(), json={"model": old}, timeout=30)
                 log.info("modelo antiguo borrado: %s", old)
             except Exception:
                 log.exception("borrar %s", old)
@@ -194,7 +210,7 @@ def ensure_vision_background() -> None:
     vm = settings["vision_model"]
     if vm and vm not in installed_models():
         try:
-            with requests.post(settings["ollama_url"] + "/api/pull", json={"model": vm, "stream": False}, timeout=None):
+            with requests.post(settings["ollama_url"] + "/api/pull", headers=_h(), json={"model": vm, "stream": False}, timeout=None):
                 pass
         except Exception:
             log.exception("visión no instalada")
@@ -207,7 +223,7 @@ def run_setup() -> None:
     ensure_llm()
     bus.progress.emit(-1, "Calentando el núcleo…")
     try:
-        requests.post(settings["ollama_url"] + "/api/generate",
+        requests.post(settings["ollama_url"] + "/api/generate", headers=_h(),
                       json={"model": settings["model"], "prompt": "", "keep_alive": -1,
                             "options": {"num_ctx": int(settings["num_ctx"])}}, timeout=120)
     except Exception:

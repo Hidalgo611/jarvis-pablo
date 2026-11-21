@@ -4,7 +4,6 @@ from __future__ import annotations
 import json
 import re
 
-import requests
 
 from ..brain import now_text
 from ..bus import bus
@@ -40,7 +39,8 @@ def research_report(topic: str, title: str | None = None, format: str = "docx", 
     bus.status.emit("Redactando el informe…")
     user = f"TEMA: {topic}\n" + (f"ENFOQUE PEDIDO: {focus}\n" if focus else "") + f"\nFUENTES:\n{sources[:9000]}"
     body = ""
-    with requests.post(settings["ollama_url"] + "/api/chat", stream=True, timeout=(5, 300), json={
+    from .. import llm
+    with llm.post("/api/chat", stream=True, timeout=(5, 300), payload={
         "model": settings["model"], "stream": True, "think": False, "keep_alive": -1,
         "options": {"num_ctx": int(settings["num_ctx"]), "temperature": 0.4, "num_predict": 1400},
         "messages": [{"role": "system", "content": WRITER.format(fecha=now_text())}, {"role": "user", "content": user}]}) as r:

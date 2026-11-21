@@ -117,9 +117,10 @@ class Greeter:
         return bool(last) and time.time() - last >= self.MIN_GAP
 
     def _prompt(self) -> str:
-        return ("(Instrucción interna: Pablo acaba de llamarte después de un rato. Salúdale tú primero, con naturalidad, "
-                "en DOS frases cortas como máximo (unas 25 palabras), tomando la iniciativa según la hora y lo último que te contó "
-                "(por ejemplo, pregúntale qué tal le fue). Termina ofreciéndote a ayudar. No uses herramientas.)")
+        return (f"(Instrucción interna: {settings['user_name']} acaba de llamarte después de un rato. Salúdale tú primero, "
+                "con naturalidad, en DOS frases cortas como máximo (unas 25 palabras), según la hora y lo ÚLTIMO que te "
+                "contó él (por ejemplo, si se fue a trabajar, pregúntale qué tal le fue). No saques otros temas ni inventes "
+                "nada. Termina ofreciéndote a ayudar. No uses herramientas.)")
 
     def _generate(self) -> str:
         txt = self.brain.quick(self._prompt(), max_tokens=55)

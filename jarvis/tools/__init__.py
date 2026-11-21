@@ -51,7 +51,7 @@ def N(desc: str) -> dict:
 
 
 CORE = ["open_app", "close_app", "open_website", "web_search", "system", "screen_click", "look_at_screen",
-        "remember", "browser", "focus_window", "set_reminder", "plan"]
+        "remember", "forget", "browser", "focus_window", "set_reminder", "plan"]
 # grupo -> (palabras clave, herramientas)
 GROUPS = {
     "youtube": (r"youtube|yutub|v[ií]deo|canal|shorts|directo|reproduc|tr[aá]iler|canci[oó]n|anuncio|calidad|pantalla completa|"
@@ -64,7 +64,12 @@ GROUPS = {
     "archivos": (r"carpeta|archivo|fichero|descargas|documentos|escritorio|im[aá]genes|fotos|busca el archivo",
                  ["open_folder", "find_files", "open_file"]),
     "teclado": (r"escribe|teclea|pulsa|tecla|atajo|rat[oó]n|copia|pega|control|alt\b", ["type_text", "press_keys", "mouse"]),
-    "jarvis": (r"rutina|cada d[ií]a|todos los d[ií]as|voz|habla m[aá]s|ajuste|configura|actualiza|versi[oó]n|habilidad|"
+    "rutinas": (r"rutina|automatiza|autom[aá]tic|a partir de ahora|de ahora en adelante|desde ahora|cada (d[ií]a|ma[ñn]ana|"
+                r"noche|tarde|semana|hora|vez|lunes|martes|mi[eé]rcoles|jueves|viernes|s[aá]bado|domingo)|todos los (d[ií]as|lunes|"
+                r"martes|mi[eé]rcoles|jueves|viernes|s[aá]bados|domingos)|todas las (ma[ñn]anas|noches|tardes)|siempre que|"
+                r"cuando (encienda|arranque|diga)|al encender|programa(r|me)? (que|para)|diariamente",
+                ["create_routine", "list_routines", "delete_routine"]),
+    "jarvis": (r"rutina|voz|habla m[aá]s|ajuste|configura|actualiza|versi[oó]n|habilidad|"
                r"aprend|sabes de m[ií]|olvida|qui[eé]n eres|c[oó]mo te llamas|estado del (pc|ordenador|sistema)|bater[ií]a|memoria ram",
                ["create_routine", "list_routines", "delete_routine", "voices", "settings", "check_updates", "create_skill",
                 "undo_skill", "about", "what_you_know", "forget", "system_status"]),

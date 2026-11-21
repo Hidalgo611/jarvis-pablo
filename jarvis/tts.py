@@ -130,6 +130,9 @@ class Speaker:
         self.on_active: Optional[Callable[[bool], None]] = None
         from collections import deque
         self.recent: deque = deque(maxlen=4)   # frases que se están diciendo (para distinguir eco de interrupción)
+        self.env: deque = deque(maxlen=200)    # (hora, volumen) de lo que sale por el altavoz: referencia del eco
+        self.gain = 1.0                        # <1 mientras parece que le interrumpen (se baja al instante)
+        self._target_gain = 1.0
         self.load_voice(settings["voice"])
         threading.Thread(target=self._synth_loop, name="tts-synth", daemon=True).start()
         threading.Thread(target=self._play_loop, name="tts-play", daemon=True).start()
@@ -187,7 +190,21 @@ class Speaker:
                     break
         with self._lock:
             self._pending = 0
+        self._target_gain = 1.0
+        self.gain = 1.0
         self._set_active(False)
+
+    def duck(self, level: float = 0.25) -> None:
+        """Baja la voz ya (parece que el usuario habla encima). Reversible con unduck()."""
+        self._target_gain = level
+
+    def unduck(self) -> None:
+        self._target_gain = 1.0
+
+    def out_level(self, since: float) -> float:
+        """Volumen máximo que ha salido por el altavoz desde `since` (para estimar el eco en el micro)."""
+        vals = [v for t, v in list(self.env) if t >= since]
+        return max(vals) if vals else 0.0
 
     def busy(self) -> bool:
         return self._pending > 0
@@ -259,7 +276,15 @@ class Speaker:
                     if self._stop.is_set() or gen != self._gen:
                         break
                     b = x[i:i + block]
-                    bus.level.emit(min(1.0, float(np.sqrt(np.mean(b ** 2))) * 6))
+                    g0, g1 = self.gain, self._target_gain
+                    if g0 != g1:  # rampa corta: sin clics al bajar/subir
+                        self.gain = g1 if abs(g1 - g0) < 0.05 else g0 + (g1 - g0) * 0.6
+                        b = b * np.linspace(g0, self.gain, b.shape[0], dtype=np.float32)
+                    elif g0 != 1.0:
+                        b = b * g0
+                    lvl = float(np.sqrt(np.mean(b ** 2)))
+                    self.env.append((time.time(), lvl))
+                    bus.level.emit(min(1.0, lvl * 6))
                     stream.write(b.reshape(-1, 1))
             except Exception:
                 log.exception("error reproduciendo")

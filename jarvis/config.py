@@ -10,7 +10,7 @@ from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
 APP_NAME = "Jarvis"
-VERSION = "0.3.1"
+VERSION = "0.4.0"
 # Repositorio público de GitHub donde se publican las versiones ("usuario/repo").
 # Vacío = actualizaciones desactivadas.
 UPDATE_REPO = "Hidalgo611/jarvis-pablo"
@@ -41,6 +41,10 @@ DEFAULTS: dict = {
     "model": "qwen3.5:4b",         # cerebro principal: herramientas + visión; cabe entero en 8 GB de VRAM
     "vision_model": "",            # vacío = el mismo modelo (si el cerebro no tiene visión, poner uno que sí)
     "num_ctx": 12288,
+    "temperature": 0.5,            # más bajo = más centrado (un modelo pequeño se dispersa con temperaturas altas)
+    "server_key": "",              # clave del Jarvis Server (si el cerebro está en otro PC)
+    "fallback_url": "",            # núcleo de respaldo si el servidor no responde (p. ej. http://127.0.0.1:11434)
+    "fallback_model": "",          # modelo del respaldo (vacío = el mismo)
     "voice": "jarvis-clasico",
     "voice_speed": 1.0,
     "voice_fx": "sutil",          # sutil | robot | off
@@ -110,7 +114,10 @@ class Settings:
                 self.data["model"] = DEFAULTS["model"]
             if self.data.get("num_ctx") == 8192:
                 self.data["num_ctx"] = DEFAULTS["num_ctx"]
-        self.data["settings_version"] = 4
+        if v < 5:
+            # 0.4.0: muestreo más centrado
+            self.data.setdefault("temperature", DEFAULTS["temperature"])
+        self.data["settings_version"] = 5
 
     def __getitem__(self, k):
         return self.data.get(k, DEFAULTS.get(k))

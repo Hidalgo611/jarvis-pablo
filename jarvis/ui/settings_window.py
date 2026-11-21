@@ -100,6 +100,15 @@ class SettingsWindow(QDialog):
             pass
         self.mic.setCurrentIndex(max(0, self.mic.findData(settings["mic_device"])))
         form.addRow("Micrófono", self.mic)
+        self.server = QLineEdit(settings["ollama_url"])
+        self.server.setPlaceholderText("http://127.0.0.1:11434  o  http://pc-servidor:11500")
+        self.server.setToolTip("Dónde está el cerebro de Jarvis: en este PC (127.0.0.1:11434) o en el PC-servidor "
+                               "(su nombre de Tailscale y el puerto del Jarvis Server, 11500).")
+        form.addRow("Servidor de IA", self.server)
+        self.key = QLineEdit(settings["server_key"])
+        self.key.setEchoMode(QLineEdit.Password)
+        self.key.setPlaceholderText("La que muestra el Jarvis Server al instalarlo")
+        form.addRow("Clave del servidor", self.key)
         root.addLayout(form)
         root.addSpacing(6)
 
@@ -145,6 +154,16 @@ class SettingsWindow(QDialog):
         settings.set("voice_fx", self.fx.currentData())
         settings.set("wake_threshold", round(1 - self.sens.value() / 100, 2))
         settings.set("mic_device", self.mic.currentData())
+        url = self.server.text().strip().rstrip("/") or "http://127.0.0.1:11434"
+        if not url.startswith("http"):
+            url = "http://" + url
+        settings.set("ollama_url", url)
+        settings.set("server_key", self.key.text().strip())
+        try:
+            from ..memory import memory
+            memory.set_profile("nombre", settings["user_name"])
+        except Exception:
+            pass
         for k, cb in self.checks.items():
             settings.set(k, cb.isChecked())
         self.on_saved()

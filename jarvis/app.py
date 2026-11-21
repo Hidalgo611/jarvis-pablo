@@ -1,4 +1,4 @@
-﻿"""Orquestador de Jarvis: estados, sesión de conversación, servicios y bandeja del sistema."""
+"""Orquestador de Jarvis: estados, sesión de conversación, servicios y bandeja del sistema."""
 from __future__ import annotations
 
 import ctypes
@@ -43,12 +43,19 @@ def strip_wake(text: str) -> str:
 
 
 BARGE_WORDS = re.compile(r"\b(para|par[aá]te|espera|calla|c[aá]llate|stop|basta|silencio|oye|jarvis|yarvis|vale vale|"
-                         r"no no|d[eé]jalo|un momento)\b", re.I)
+                         r"no no|d[eé]jalo|un momento|te equivocas|eso no|que no|error|mentira|qu[eé] dices)\b", re.I)
+# interrupciones muy cortas: «¡No!», «para», «espera»… (con menos de 3 palabras no basta la comparación con el eco)
+SHORT_BARGE = re.compile(r"^\W*(no|no no|no,? no|nono|para|espera|stop|calla|basta|oye|eh|ey|pero|vale|a ver|jarvis)\W*$", re.I)
 
 
 def is_user_speech(heard: str, said_sentences: list[str]) -> bool:
     W = r"[a-záéíóúñü]{3,}"
     h = heard.lower()
+    last = (said_sentences[-1] if said_sentences else "").lower()
+    if SHORT_BARGE.match(h):
+        # un «no» suelto casi nunca es eco (el eco de Jarvis trae frases enteras); salvo que acabe de decir justo eso
+        word = re.sub(r"\W+", " ", h).strip()
+        return not re.search(rf"(^|\W){re.escape(word)}\W*$", last)
     said_words = set(re.findall(W, " ".join(said_sentences).lower()))
     for m in BARGE_WORDS.finditer(h):
         if not set(re.findall(W, m.group(0))) <= said_words:   # palabra de parada que Jarvis no está diciendo
@@ -279,6 +286,7 @@ class Jarvis(QObject):
         self.audio = AudioEngine()
         self.audio.on_wake = self._interrupt_and_wake
         self.audio.on_barge = self._is_user_speech
+        self.audio.speaker = self.speaker
         self.speaker.on_active = self._on_speaking
         self.audio.start()
         self.scheduler = Scheduler(self._routine_actions, lambda t: self.events.put(("say", t)))
@@ -344,6 +352,13 @@ class Jarvis(QObject):
     def _interrupt_and_wake(self, source: str, rest: str) -> None:
         """Se llama desde hilos de audio/atajo: corta voz y tarea al instante y avisa al conductor."""
         if self.speaker:
+            if self.speaker.busy() and self.brain and not self.brain.busy:
+                # ya había terminado de pensar y estaba hablando: que sepa hasta dónde le oíste
+                said = [t for ts, t in self.speaker.recent if time.time() - ts < 30]
+                try:
+                    self.brain.mark_interrupted(" ".join(said[-2:]))
+                except Exception:
+                    log.exception("marcar interrupción")
             self.speaker.stop()
         if self.brain and self.brain.busy:
             self.brain.cancel.set()
@@ -465,9 +480,21 @@ class Jarvis(QObject):
             bus.status.emit(f"Rutina: {name}")
             if announce:
                 self.speaker.say(announce)
+            tasks = []
             for a in actions:
+                if a.get("task"):
+                    tasks.append(a["task"])
+                    continue
                 bus.status.emit(tools.label_for(a.get("tool", ""), a.get("args", {})))
                 tools.execute(a.get("tool", ""), a.get("args", {}))
+            if tasks and self.brain and not self.brain.busy:
+                # órdenes en lenguaje natural: las ejecuta el cerebro con sus herramientas, como si se lo pidieras
+                self.task_id += 1
+                order = " y luego ".join(tasks)
+                threading.Thread(target=self._run_brain, name="brain",
+                                 args=(f"(Rutina automática «{name}»: hazlo ahora, sin preguntar) {order}", self.task_id),
+                                 daemon=True).start()
+                return
             self.speaker.wait()
             time.sleep(1.5)
             if not self.session:
@@ -656,6 +683,10 @@ class Jarvis(QObject):
         bus.state.emit("speaking")
         self.speaker.wait()
         if not self.session:
+            time.sleep(1.0)
+            if not self.session:
+                bus.mode.emit("hidden")
+                bus.state.emit("idle")
             return
         from .learning import detector
         from .tools.browser import browsing_active
@@ -672,8 +703,9 @@ class Jarvis(QObject):
                 def no(p=p):
                     detector.answer(p, False)
                     self.speaker.say("Entendido. No volveré a preguntarlo.")
-                self.pending_q = {"text": f"Por cierto, {settings['address']}: he notado que {p['text'].split(' (')[0]}. "
-                                          f"¿Quieres que lo haga yo automáticamente?", "yes": yes, "no": no, "asked": True}
+                self.pending_q = {"text": f"Por cierto, {settings['address']}: llevo unos días observando y he visto que "
+                                          f"{p['text'].split(' (')[0]}. ¿Quieres que a partir de ahora lo haga yo?",
+                                  "yes": yes, "no": no, "asked": True}
                 self._say_and_wait(self.pending_q["text"])
         if self.pending_q and not self.pending_q.get("asked"):
             self.pending_q["asked"] = True

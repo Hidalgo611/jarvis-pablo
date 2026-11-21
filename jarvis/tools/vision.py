@@ -9,7 +9,6 @@ import re
 import threading
 import time
 
-import requests
 
 from ..bus import bus
 from ..config import settings
@@ -65,7 +64,8 @@ def capture(mark_cursor: bool = True) -> tuple[str, tuple[int, int], tuple[int, 
 
 
 def _ask(prompt: str, b64: str, max_tokens: int = 200) -> str:
-    r = requests.post(settings["ollama_url"] + "/api/chat", timeout=120, json={
+    from .. import llm
+    r = llm.post("/api/chat", timeout=120, payload={
         "model": vision_model(), "stream": False, "think": False, "keep_alive": -1,
         "options": {"num_ctx": int(settings["num_ctx"]), "temperature": 0, "num_predict": max_tokens},
         "messages": [{"role": "user", "content": prompt, "images": [b64]}]})
