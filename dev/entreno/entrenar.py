@@ -33,33 +33,39 @@ def load_rows(path: str, limit: int | None, few_tools: bool = False) -> list[dic
     return rows
 
 
-def encode(tok, ex: dict, max_len: int) -> dict | None:
-    """input_ids + labels (-100 salvo en los mensajes de Jarvis). Cada mensaje del asistente se localiza
-    comparando el texto con y sin él (la plantilla de Qwen es coherente por prefijos)."""
+def encode(tok, ex: dict, max_len: int) -> list[dict]:
+    """Una conversación → un ejemplo por cada frase del usuario: todo lo anterior va de contexto (tal como lo ve
+    Jarvis en ese momento, con las respuestas antiguas sin el bloque <think>) y solo se entrena lo que Jarvis
+    responde a ESA frase (llamadas a herramientas incluidas). labels = -100 fuera de esas respuestas."""
     msgs, tools = ex["messages"], ex["tools"]
 
     def render(m, gen=False):
         return tok.apply_chat_template(m, tools=tools, tokenize=False, add_generation_prompt=gen, enable_thinking=False)
 
-    full = render(msgs)
-    spans, pos = [], 0
-    for i, m in enumerate(msgs):
-        if m["role"] != "assistant":
+    users = [i for i, m in enumerate(msgs) if m["role"] == "user"]
+    out = []
+    for k, u in enumerate(users):
+        end = users[k + 1] if k + 1 < len(users) else len(msgs)
+        sub = msgs[:end]
+        full = render(sub)
+        spans = []
+        for i in range(u + 1, end):
+            if sub[i]["role"] != "assistant":
+                continue
+            pre, cur = render(sub[:i], True), render(sub[:i + 1])
+            if not cur.startswith(pre) or not full.startswith(cur):
+                spans = None
+                break
+            spans.append((len(pre), len(cur)))
+        if not spans:
             continue
-        pre, cur = render(msgs[:i], True), render(msgs[:i + 1])
-        if not cur.startswith(pre) or not full.startswith(cur):
-            return None
-        spans.append((len(pre), len(cur)))
-    enc = tok(full, return_offsets_mapping=True, add_special_tokens=False)
-    ids, offs = enc["input_ids"], enc["offset_mapping"]
-    if len(ids) > max_len:
-        return None
-    labels = [-100] * len(ids)
-    for k, (a, b) in enumerate(offs):
-        if any(s <= a < e for s, e in spans):
-            labels[k] = ids[k]
-    del pos
-    return {"input_ids": ids, "labels": labels}
+        enc = tok(full, return_offsets_mapping=True, add_special_tokens=False)
+        ids, offs = enc["input_ids"], enc["offset_mapping"]
+        if len(ids) > max_len:
+            continue
+        labels = [ids[j] if any(s <= a < e for s, e in spans) else -100 for j, (a, _) in enumerate(offs)]
+        out.append({"input_ids": ids, "labels": labels})
+    return out
 
 
 def main() -> int:
@@ -72,7 +78,7 @@ def main() -> int:
     ap.add_argument("--lr", type=float, default=1e-4)
     ap.add_argument("--rank", type=int, default=16)
     ap.add_argument("--accum", type=int, default=8, help="ejemplos por paso de optimización")
-    ap.add_argument("--max-len", type=int, default=6144)
+    ap.add_argument("--max-len", type=int, default=7168)
     ap.add_argument("--max-steps", type=int, default=0)
     ap.add_argument("--limit", type=int, default=0)
     ap.add_argument("--no-4bit", action="store_true")
@@ -107,10 +113,12 @@ def main() -> int:
     model.print_trainable_parameters()
 
     rows = load_rows(a.data, a.limit or None, a.pocas_herramientas)
-    data = [e for e in (encode(tok, r, a.max_len) for r in rows) if e]
-    val = [e for e in (encode(tok, r, a.max_len) for r in load_rows(a.val, (a.limit or 0) // 4 or None, a.pocas_herramientas)) if e]
+    data = [e for r in rows for e in encode(tok, r, a.max_len)]
+    val = [e for r in load_rows(a.val, (a.limit or 0) // 4 or None, a.pocas_herramientas) for e in encode(tok, r, a.max_len)]
+    nturns = sum(sum(m["role"] == "user" for m in r["messages"]) for r in rows)
     ntok = sum(sum(x != -100 for x in d["labels"]) for d in data)
-    print(f"{len(data)} ejemplos ({len(rows) - len(data)} descartados por largos), {ntok} tokens de Jarvis a aprender", flush=True)
+    print(f"{len(data)} ejemplos de {nturns} frases en {len(rows)} conversaciones ({nturns - len(data)} descartados), "
+          f"{ntok} tokens de Jarvis a aprender", flush=True)
 
     dev = next(model.parameters()).device
     opt = torch.optim.AdamW([p for p in model.parameters() if p.requires_grad], lr=a.lr, weight_decay=0.0)
