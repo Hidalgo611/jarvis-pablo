@@ -41,7 +41,7 @@ DEFAULTS: dict = {
     "model": "qwen3.5:4b",         # cerebro principal: herramientas + visión; cabe entero en 8 GB de VRAM
     "vision_model": "",            # vacío = el mismo modelo (si el cerebro no tiene visión, poner uno que sí)
     "num_ctx": 12288,
-    "temperature": 0.5,            # más bajo = más centrado (un modelo pequeño se dispersa con temperaturas altas)
+    "temperature": 0.3,            # más bajo = más centrado (un modelo pequeño se dispersa con temperaturas altas)
     "server_key": "",              # clave del Jarvis Server (si el cerebro está en otro PC)
     "fallback_url": "",            # núcleo de respaldo si el servidor no responde (p. ej. http://127.0.0.1:11434)
     "fallback_model": "",          # modelo del respaldo (vacío = el mismo)
@@ -117,7 +117,11 @@ class Settings:
         if v < 5:
             # 0.4.0: muestreo más centrado
             self.data.setdefault("temperature", DEFAULTS["temperature"])
-        self.data["settings_version"] = 5
+        if v < 6:
+            # 0.4.1: con 0,5 el modelo pequeño era inestable en las pruebas (mismas frases, respuestas distintas)
+            if self.data.get("temperature") == 0.5:
+                self.data["temperature"] = DEFAULTS["temperature"]
+        self.data["settings_version"] = 6
 
     def __getitem__(self, k):
         return self.data.get(k, DEFAULTS.get(k))

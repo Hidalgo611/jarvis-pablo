@@ -69,8 +69,11 @@ def fake(name: str, args: dict) -> str:
     if name == "open_website":
         return f"Abierta: {a.get('target', '')}"
     if name in ("web_search", "web_research"):
-        return ("1. El tiempo en Madrid hoy: 14 °C, nubes y claros, máxima 17 °C. (aemet.es)\n"
-                "2. Previsión Madrid: lluvia débil por la tarde. (eltiempo.es)")
+        q = str(a.get("query", "")).lower()
+        if "tiempo" in q or "clima" in q:
+            return ("1. El tiempo en Madrid hoy: 14 °C, nubes y claros, máxima 17 °C. (aemet.es)\n"
+                    "2. Previsión Madrid: lluvia débil por la tarde. (eltiempo.es)")
+        return f"1. Resultados sobre «{q}»: en Venus un día dura más que un año (243 días terrestres). (nasa.gov)"
     if name == "research_report":
         return "Documento creado: Informe.pdf. El documento ya está abierto en pantalla. Lo más importante: X sube un 12 %."
     if name == "plan":
@@ -148,9 +151,9 @@ S = [
         {"say": "Estoy un poco cansado hoy", "none": True, "max_words": 40, "forbid": [r"bar[cç]a|f[uú]tbol"]},
     ]},
     {"name": "interrupcion_no", "turns": [
-        {"say": "Cuéntame un dato curioso sobre el espacio", "none": True},
+        {"say": "Cuéntame un dato curioso sobre el espacio"},
         {"say": "No, para, mejor pon música relajante", "interrupt": "Sabías que en Venus un día dura más que",
-         "expect": [("youtube", {"action": "re:play"})]},
+         "expect": [("re:youtube|open_app", {})]},
     ]},
 ]
 

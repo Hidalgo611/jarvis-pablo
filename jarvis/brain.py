@@ -98,6 +98,8 @@ NAME_RE = re.compile(r"(?:^|[,.;:¡!¿?]\s*|\b(?:no|que|pues|y|yo|vale|oye|hola)
 # «no…» al principio (sin ser «no sé», «no puedo»…) o frases de corrección en cualquier sitio
 CORRECTION_START = re.compile(r"^\W*(?:no\b(?![\s,]+(?:s[eé]|puedo|quiero|tengo|hay|me apetece|me gusta|est[aá] mal|pasa nada))|"
                               r"que no\b|error\b|incorrecto|mal\b)", re.I)
+RECALL_RE = re.compile(r"\b(te (he dicho|dije|cont[eé]|comenté)|recuerdas|te acuerdas|qu[eé] te (dije|he dicho)|"
+                       r"lo que te (dije|he dicho|cont[eé]))\b", re.I)
 CORRECTION_ANY = re.compile(r"\b(te equivocas|te has equivocado|est[aá]s equivocado|eso no es (as[ií]|verdad|cierto)|no es as[ií]|"
                             r"eso est[aá] mal|lo has entendido mal|te he dicho|ya te lo he dicho|no me has entendido|no he dicho|"
                             r"no te he dicho|no era eso|no es eso|me refer[ií]a|quer[ií]a decir|no me llamo|que me llamo|"
@@ -148,6 +150,10 @@ def understand(user_text: str, interrupted: str = "") -> str:
     nm = detect_name(user_text)
     if nm:
         notes.append(apply_name(*nm))
+    elif RECALL_RE.search(user_text) and not CORRECTION_START.search(user_text):
+        notes.append("(Nota interna: te pregunta por algo que te dijo antes. La respuesta está en los mensajes anteriores "
+                     "de esta conversación o en tus datos: búscala ahí y contéstale con ese dato exacto. Si de verdad no "
+                     "está, dile que no lo recuerdas.)")
     elif CORRECTION_START.search(user_text) or CORRECTION_ANY.search(user_text):
         notes.append("(Nota interna: te está corrigiendo o aclarando. Tiene razón: acéptalo sin discutir, discúlpate en "
                      "pocas palabras si te equivocaste y sigue con lo que dice ahora. Si corrige un dato suyo, guárdalo "
@@ -191,9 +197,11 @@ CÓMO HABLAS (todo se dice en voz alta):
 
 EJEMPLOS DE BUENAS RESPUESTAS:
 - «Me voy al trabajo» → «Que vaya bien el turno, {a}. Aquí estaré cuando vuelvas.»
-- «Estoy cansado» → «Normal, llevas un día largo. Si quieres, te pongo algo de música tranquila.»
+- «Estoy cansado» → «Normal después de un día así. Descansa un rato, {a}.»
 - «Baja el volumen al 10 %» → (llamada a `system` volume_set 10) → «Listo, al 10 %.»
 - «Ponme un vídeo de Ibai» → (llamada a `youtube` play «Ibai») → «Ahí lo tienes.»
+- «¿A qué hora te dije que era el examen?» → (lo buscas en los mensajes anteriores) → «A las 6 de la tarde.»
+No copies estas frases tal cual: son el estilo, breve y al grano. No ofrezcas cosas que no te ha pedido.
 - «No, me llamo Pablo» → «Perdona, Pablo. No se me vuelve a olvidar.»
 
 CÓMO ENTIENDES:
@@ -575,6 +583,11 @@ class Brain:
                 messages.append(msg)
                 if not calls:
                     final = content
+                    if not spoken_any and step > 0 and not self.cancel.is_set():
+                        # hizo algo pero no ha dicho nada (o solo relleno): confirma corto con lo que pasó de verdad
+                        last = next((m["content"] for m in reversed(messages) if m.get("role") == "tool"), "")
+                        say("No ha salido bien, " + a + "." if last.startswith("ERROR") else random.choice(["Hecho.", "Listo."]))
+                        spoken_any = True
                     break
                 quick = all(c.get("function", {}).get("name") in QUICK_TOOLS for c in calls)
                 if not spoken_any and not quick:

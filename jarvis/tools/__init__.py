@@ -51,7 +51,7 @@ def N(desc: str) -> dict:
 
 
 CORE = ["open_app", "close_app", "open_website", "web_search", "system", "screen_click", "look_at_screen",
-        "remember", "forget", "browser", "focus_window", "set_reminder", "plan"]
+        "remember", "forget", "browser", "focus_window", "plan"]
 # grupo -> (palabras clave, herramientas)
 GROUPS = {
     "youtube": (r"youtube|yutub|v[ií]deo|canal|shorts|directo|reproduc|tr[aá]iler|canci[oó]n|anuncio|calidad|pantalla completa|"
@@ -64,6 +64,9 @@ GROUPS = {
     "archivos": (r"carpeta|archivo|fichero|descargas|documentos|escritorio|im[aá]genes|fotos|busca el archivo",
                  ["open_folder", "find_files", "open_file"]),
     "teclado": (r"escribe|teclea|pulsa|tecla|atajo|rat[oó]n|copia|pega|control|alt\b", ["type_text", "press_keys", "mouse"]),
+    # recordatorios solo si los pide (si no, el modelo pequeño los pone sin venir a cuento)
+    "recordatorios": (r"recu[eé]rd(a|ame|amelo)|av[ií]s(a|ame)|recordatorio|temporizador|alarma|despi[eé]rtame|"
+                      r"en \w+ minutos|dentro de|cuenta atr[aá]s", ["set_reminder"]),
     "rutinas": (r"rutina|automatiza|autom[aá]tic|a partir de ahora|de ahora en adelante|desde ahora|cada (d[ií]a|ma[ñn]ana|"
                 r"noche|tarde|semana|hora|vez|lunes|martes|mi[eé]rcoles|jueves|viernes|s[aá]bado|domingo)|todos los (d[ií]as|lunes|"
                 r"martes|mi[eé]rcoles|jueves|viernes|s[aá]bados|domingos)|todas las (ma[ñn]anas|noches|tardes)|siempre que|"
