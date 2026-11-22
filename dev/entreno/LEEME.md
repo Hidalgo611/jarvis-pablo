@@ -4,7 +4,19 @@ Enseña al modelo el estilo y las decisiones de Jarvis: qué herramienta usar y 
 no inventar, aceptar correcciones, recordar lo dicho y no cambiar de tema. No necesita un modelo más grande: el
 resultado ocupa lo mismo que el 4B de ahora.
 
-Se recomienda **WSL2 (Ubuntu)** en el PC con la gráfica NVIDIA. Ahí las librerías rápidas de la "atención
+## En Windows (lo más fácil): un solo script
+
+En PowerShell, desde la carpeta del código, primero `git pull` y después:
+```
+powershell -ExecutionPolicy Bypass -File .\dev\entreno\entrenar_windows.ps1 -Prueba
+```
+Si la prueba (5 pasos) va bien, lanza lo mismo sin `-Prueba` para el entrenamiento completo. El script
+crea su propio entorno de Python, instala lo necesario, genera los datos, entrena, funde y crea `jarvis-pablo`
+en Ollama.
+
+## En Linux / WSL2 (alternativa)
+
+Si en Windows el entrenamiento falla o va muy lento, usa **WSL2 (Ubuntu)**: en el PC con la gráfica NVIDIA. Ahí las librerías rápidas de la "atención
 lineal" de Qwen3.5 (`flash-linear-attention`, `causal-conv1d`) funcionan sin problemas. Sin ellas el entrenamiento
 es mucho más lento y gasta mucha más memoria.
 
