@@ -165,9 +165,9 @@ def main() -> int:
     rows = load_rows(a.data, a.limit or None, a.pocas_herramientas)
     data = [e for r in rows for e in encode(tok, r, a.max_len)]
     val = [e for r in load_rows(a.val, (a.limit or 0) // 4 or None, a.pocas_herramientas) for e in encode(tok, r, a.max_len)]
-    nturns = sum(sum(m["role"] == "user" for m in r["messages"]) for r in rows)
+    nturns = sum(1 if "train_from" in r else sum(m["role"] == "user" for m in r["messages"]) for r in rows)
     ntok = sum(sum(x != -100 for x in d["labels"]) for d in data)
-    print(f"{len(data)} ejemplos de {nturns} frases en {len(rows)} conversaciones ({nturns - len(data)} descartados), "
+    print(f"{len(data)} ejemplos de {nturns} posibles ({nturns - len(data)} descartados por largos), "
           f"{ntok} tokens de Jarvis a aprender", flush=True)
 
     dev = next(model.parameters()).device
