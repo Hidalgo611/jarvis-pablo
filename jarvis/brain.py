@@ -90,6 +90,9 @@ def context_prefix() -> str:
     lt = time.localtime()
     # sin el año: un modelo pequeño tiende a repetirlo («¿listo para el domingo de 2026?»)
     head = f"[contexto, no lo leas: {DIAS[lt.tm_wday]} {lt.tm_mday} de {MESES[lt.tm_mon - 1]}, {lt.tm_hour:02d}:{lt.tm_min:02d}"
+    h = lt.tm_hour
+    head += " (" + ("de madrugada" if h < 6 else "por la mañana" if h < 13 else "a mediodía" if h < 15 else
+                    "por la tarde" if h < 21 else "de noche") + ")"
     last = last_interaction()
     gap = time.time() - last if last else 0
     if last and gap > 30 * 60:
