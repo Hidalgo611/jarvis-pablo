@@ -20,20 +20,24 @@ if (-not (Test-Path "$tools\bin\llama-quantize.exe") -or -not (Test-Path "$tools
     if (Test-Path $tools) { Remove-Item -Recurse -Force $tools }
     Paso "Descargando llama.cpp (herramientas oficiales de conversión)"
     New-Item -ItemType Directory -Force $tools | Out-Null
-    $rel = Invoke-RestMethod "https://api.github.com/repos/ggml-org/llama.cpp/releases/latest"
-    $tag = $rel.tag_name
-    # paquete de Windows x64 para CPU (el nombre cambia entre versiones: se elige por criterio, no por nombre exacto)
-    $win = $rel.assets | Where-Object { $_.name -match "win" -and $_.name -match "\.zip$" -and
-        $_.name -notmatch "arm64|cuda|cudart|vulkan|hip|sycl|opencl|kompute|rocm|radeon" }
-    $asset = ($win | Where-Object { $_.name -match "cpu" } | Select-Object -First 1)
-    if (-not $asset) { $asset = ($win | Where-Object { $_.name -match "x64|amd64" } | Select-Object -First 1) }
-    if (-not $asset) { $asset = ($win | Select-Object -First 1) }
-    if (-not $asset) {
-        Write-Host "Paquetes de la versión $tag de llama.cpp:" -ForegroundColor Yellow
-        $rel.assets | ForEach-Object { Write-Host "  $($_.name)" }
-        throw "No encuentro el paquete de Windows en la versión $tag de llama.cpp (pásale la lista a Claude)"
+    # la «última» versión no siempre trae programas (la v1.0.0 solo trae un .txt): se busca la más reciente que sí
+    $rels = Invoke-RestMethod "https://api.github.com/repos/ggml-org/llama.cpp/releases?per_page=30"
+    $asset = $null; $tag = $null
+    foreach ($rel in $rels) {
+        if ($rel.draft) { continue }
+        # paquete de Windows x64 para CPU (el nombre cambia entre versiones: se elige por criterio, no por nombre exacto)
+        $win = $rel.assets | Where-Object { $_.name -match "win" -and $_.name -match "\.zip$" -and
+            $_.name -notmatch "arm64|cuda|cudart|vulkan|hip|sycl|opencl|kompute|rocm|radeon" }
+        $a = ($win | Where-Object { $_.name -match "cpu" } | Select-Object -First 1)
+        if (-not $a) { $a = ($win | Where-Object { $_.name -match "x64|amd64" } | Select-Object -First 1) }
+        if ($a) { $asset = $a; $tag = $rel.tag_name; break }
     }
-    Write-Host "  paquete: $($asset.name)"
+    if (-not $asset) {
+        Write-Host "Versiones recientes de llama.cpp y sus paquetes:" -ForegroundColor Yellow
+        $rels | Select-Object -First 5 | ForEach-Object { Write-Host "  $($_.tag_name): $(($_.assets | ForEach-Object name) -join ', ')" }
+        throw "No encuentro ninguna versión de llama.cpp con paquete de Windows (pásale la lista a Claude)"
+    }
+    Write-Host "  versión $tag, paquete: $($asset.name)"
     Invoke-WebRequest $asset.browser_download_url -OutFile "$tools\bin.zip"
     Expand-Archive "$tools\bin.zip" "$tools\bin" -Force
     Invoke-WebRequest "https://github.com/ggml-org/llama.cpp/archive/refs/tags/$tag.zip" -OutFile "$tools\src.zip"
