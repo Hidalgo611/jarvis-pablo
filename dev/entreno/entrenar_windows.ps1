@@ -41,6 +41,12 @@ if (-not (Test-Path "dev\entreno\datos\jarvis_train.jsonl")) {
 }
 
 # 3) Entrenamiento --------------------------------------------------------------------------
+Paso "Liberando la gráfica (descargo los modelos de Ollama; Jarvis los vuelve a cargar solo cuando haga falta)"
+if (Get-Command ollama -ErrorAction SilentlyContinue) {
+    $cargados = (ollama ps) | Select-Object -Skip 1 | ForEach-Object { ($_ -split "\s+")[0] } | Where-Object { $_ }
+    foreach ($m in $cargados) { ollama stop $m | Out-Null; Write-Host "  descargado: $m" }
+}
+Write-Host "  (cierra juegos y vídeos mientras entrena: necesita casi toda la memoria de la gráfica)"
 $salida = "dev\entreno\salida"
 if ($Prueba) {
     Paso "PRUEBA: 5 pasos para comprobar que todo funciona"

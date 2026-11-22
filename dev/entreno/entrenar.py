@@ -127,11 +127,18 @@ def main() -> int:
     sched = torch.optim.lr_scheduler.LambdaLR(
         opt, lambda s: min(1.0, (s + 1) / warm) * 0.5 * (1 + math.cos(math.pi * min(1.0, s / max(1, total)))))
 
+    inner = model.get_base_model()          # Qwen3_5ForCausalLM: .model (cuerpo) + .lm_head (vocabulario)
+
     def loss_of(d):
+        """Pérdida calculando el vocabulario (248k palabras) SOLO donde habla Jarvis: con la llamada normal se
+        calculaba en los ~5000 tokens del ejemplo (~5 GB de memoria) y no cabía en 8 GB."""
         ids = torch.tensor([d["input_ids"]], device=dev)
-        lab = torch.tensor([d["labels"]], device=dev)
+        lab = torch.tensor(d["labels"], device=dev)
+        pos = (lab[1:] != -100).nonzero().squeeze(-1)          # posición t predice el token t+1
         with torch.autocast("cuda", dtype=torch.bfloat16, enabled=cuda):
-            return model(input_ids=ids, labels=lab).loss
+            h = inner.model(input_ids=ids).last_hidden_state[0, pos]
+            logits = inner.lm_head(h).float()
+        return torch.nn.functional.cross_entropy(logits, lab[1:][pos])
 
     @torch.no_grad()
     def evaluate():
