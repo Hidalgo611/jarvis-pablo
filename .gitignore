@@ -8,3 +8,4 @@ dev/*.txt
 dev/*.log
 dev/req.log
 dev/banco_informe.json
+dev/banco_informe.md
