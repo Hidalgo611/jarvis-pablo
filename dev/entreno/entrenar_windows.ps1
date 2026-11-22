@@ -30,7 +30,14 @@ Run $py -c "import torch; assert torch.cuda.is_available(), 'PyTorch no ve la gr
 # 2) Datos ----------------------------------------------------------------------------------
 if (-not (Test-Path "dev\entreno\datos\jarvis_train.jsonl")) {
     Paso "Generando $Conversaciones conversaciones de entrenamiento"
-    Run $py dev\entreno\generar_datos.py --n $Conversaciones
+    # usa el entorno de Jarvis (.venv, el de compilar el .exe): el generador carga el código real de Jarvis
+    $pyJarvis = Join-Path $root ".venv\Scripts\python.exe"
+    if (-not (Test-Path $pyJarvis)) {
+        Paso "No encuentro .venv de Jarvis: instalo sus librerías en el entorno de entrenamiento"
+        Run $py -m pip install --quiet -r requirements.txt
+        $pyJarvis = $py
+    }
+    Run $pyJarvis dev\entreno\generar_datos.py --n $Conversaciones
 }
 
 # 3) Entrenamiento --------------------------------------------------------------------------
