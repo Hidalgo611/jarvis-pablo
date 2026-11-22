@@ -126,6 +126,7 @@ def clean_for_speech(text: str) -> str:
     t = re.sub(r"^\s*[-•]\s*", "", t, flags=re.M)
     t = re.sub(r"[\U0001F300-\U0001FAFF☀-➿]", "", t)
     t = t.replace("J.A.R.V.I.S.", "Jarvis").replace("JARVIS", "Jarvis")
+    t = re.sub(r"\s*\([^)]{12,400}\)", "", t)        # los paréntesis largos son notas, no se leen
     t = numbers_to_words(t)
     t = re.sub(r"\s+", " ", t)
     return t.strip()

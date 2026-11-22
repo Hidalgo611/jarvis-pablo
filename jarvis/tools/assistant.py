@@ -123,7 +123,8 @@ def create_routine(name: str, trigger_type: str, task: str = "", time: str | Non
               _t.time()))
     when = {"time": f"a las {time} ({days or 'todos'} los días)" if (days or "todos") == "todos" else f"a las {time} ({days})",
             "startup": "al encender el ordenador", "phrase": f"cuando digas «{phrase}»"}.get(trigger_type, "")
-    return f"Rutina «{name}» creada: se ejecutará {when}."
+    return (f"Rutina «{name}» creada: se ejecutará {when}. Confírmaselo así, en una frase: "
+            f"«Hecho, {when} me encargo de {task.strip() or name}.»")
 
 
 @tool("list_routines", "Lista las rutinas automáticas.", {}, [], label="Revisando rutinas")

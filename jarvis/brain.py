@@ -43,8 +43,19 @@ FILLER_RE = re.compile(r"^¿\s*(?:hay\s+)?(?:quieres|necesitas|deseas|te\s+(?:ay
                        r"en\s+algo\s+m[aá]s|de\s+nuevo|algo\s+(?:hoy|en\s+mente)|para\s+ti)\s*[,]?\s*(?:\w+)?\s*\?$", re.I)
 
 
+# ofrecimientos que nadie ha pedido («¿Quieres que te cuente…?», «¿Te gustaría…?») tras contestar: sobran.
+OFFER_RE = re.compile(r"^¿\s*(quieres que|quieres saber|te gustar[ií]a|necesitas|deseas|te apetece que|prefieres que|"
+                      r"hay algo|te ayudo|te pongo|te cuento|qu[eé] te parece si|y si)\b", re.I)
+# …salvo si es la confirmación de algo delicado (apagar, borrar…), que sí hay que preguntar
+DELICATE_RE = re.compile(r"apag|reinici|suspend|borr|elimin|vac[ií]|cierr|instal|actualic|habilidad|env[ií]|mand|"
+                         r"compr|pag|formate|desinstal", re.I)
+
+
 def is_filler(sentence: str) -> bool:
-    return bool(FILLER_RE.match(sentence.strip()))
+    s = sentence.strip()
+    if FILLER_RE.match(s):
+        return True
+    return bool(OFFER_RE.match(s)) and s.endswith("?") and not DELICATE_RE.search(s)
 
 
 def now_text() -> str:
@@ -200,7 +211,6 @@ EJEMPLOS DE BUENAS RESPUESTAS:
 - «Estoy cansado» → «Normal después de un día así. Descansa un rato, {a}.»
 - «Baja el volumen al 10 %» → (llamada a `system` volume_set 10) → «Listo, al 10 %.»
 - «Ponme un vídeo de Ibai» → (llamada a `youtube` play «Ibai») → «Ahí lo tienes.»
-- «¿A qué hora te dije que era el examen?» → (lo buscas en los mensajes anteriores) → «A las 6 de la tarde.»
 No copies estas frases tal cual: son el estilo, breve y al grano. No ofrezcas cosas que no te ha pedido.
 - «No, me llamo Pablo» → «Perdona, Pablo. No se me vuelve a olvidar.»
 
