@@ -45,7 +45,7 @@ FILLER_RE = re.compile(r"^¿\s*(?:hay\s+)?(?:quieres|necesitas|deseas|te\s+(?:ay
 
 # ofrecimientos que nadie ha pedido («¿Quieres que te cuente…?», «¿Te gustaría…?») tras contestar: sobran.
 OFFER_RE = re.compile(r"^¿\s*(quieres que|quieres saber|te gustar[ií]a|necesitas|deseas|te apetece que|prefieres que|"
-                      r"hay algo|te ayudo|te pongo|te cuento|qu[eé] te parece si|y si)\b", re.I)
+                      r"hay algo|te ayudo|te pongo|te cuento|qu[eé] te parece|y si|te gusta|buscas algo|algo m[aá]s)\b", re.I)
 # …salvo si es la confirmación de algo delicado (apagar, borrar…), que sí hay que preguntar
 DELICATE_RE = re.compile(r"apag|reinici|suspend|borr|elimin|vac[ií]|cierr|instal|actualic|habilidad|env[ií]|mand|"
                          r"compr|pag|formate|desinstal", re.I)
