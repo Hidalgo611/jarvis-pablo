@@ -54,13 +54,8 @@ if ($Prueba) {
     Paso "PRUEBA: fusión y creación en Ollama con el adaptador de prueba (jarvis-prueba)"
     $base = & $py -c "from huggingface_hub import snapshot_download as s; print(s('$Modelo'))"
     Run $py dev\entreno\fusionar.py --base $base.Trim() --lora "$salida-prueba\lora" --out "$salida-prueba\fusionado"
-    $mf = Get-Content dev\entreno\Modelfile | ForEach-Object { $_ -replace '^FROM \./salida/fusionado', 'FROM ./salida-prueba/fusionado' }
-    Set-Content dev\entreno\Modelfile.prueba $mf
-    Push-Location dev\entreno
-    ollama create jarvis-prueba -f Modelfile.prueba --quantize int4
-    $ok = $LASTEXITCODE -eq 0
-    Pop-Location
-    if (-not $ok) { Write-Host "`nFalla la creación en Ollama: pásale el error a Claude ANTES del entrenamiento largo." -ForegroundColor Yellow; exit 1 }
+    try { & "$PSScriptRoot\a_ollama.ps1" -Fusionado "$salida-prueba\fusionado" -Nombre jarvis-prueba }
+    catch { Write-Host "`nFalla el paso a Ollama: pásale el error a Claude ANTES del entrenamiento largo.`n$_" -ForegroundColor Yellow; exit 1 }
     ollama run jarvis-prueba "Hola, ¿qué tal? Responde en una frase."
     ollama rm jarvis-prueba | Out-Null
     Write-Host "`nLa prueba completa ha ido bien (entrenar, fundir y crear en Ollama). Lanza el script sin -Prueba." -ForegroundColor Green
@@ -79,15 +74,6 @@ if (-not (Test-Path "$salida\fusionado\config.json")) {
     Run $py dev\entreno\fusionar.py --base $base.Trim() --lora "$salida\lora" --out "$salida\fusionado"
 }
 
-# 5) Ollama ---------------------------------------------------------------------------------
-Paso "Creando el modelo jarvis-pablo en Ollama"
-Push-Location dev\entreno
-ollama create jarvis-pablo -f Modelfile --quantize int4
-$ok = $LASTEXITCODE -eq 0
-Pop-Location
-if (-not $ok) {
-    Write-Host "`nOllama no ha podido importarlo directamente. Copia el error y pásaselo a Claude." -ForegroundColor Yellow
-    exit 1
-}
-Write-Host "`nListo: modelo «jarvis-pablo» creado." -ForegroundColor Green
+# 5) Ollama (GGUF Q4_K_M) ------------------------------------------------------------------
+& "$PSScriptRoot\a_ollama.ps1" -Fusionado "$salida\fusionado" -Nombre jarvis-pablo
 Write-Host "Compáralo con el actual:  `$env:JARVIS_MODEL='jarvis-pablo'; .\.venv\Scripts\python.exe dev\banco.py"

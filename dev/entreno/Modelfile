@@ -1,8 +1,2 @@
-# Modelo de Jarvis entrenado (ver dev/entreno/LEEME.md). Mismo renderer/parser que el qwen3.5 oficial de Ollama:
-# son los que entienden las llamadas a herramientas.
-FROM ./salida/fusionado
-RENDERER qwen3.5
-PARSER qwen3.5
-PARAMETER temperature 0.3
-PARAMETER top_k 20
-PARAMETER top_p 0.8
+# Lo genera dev/entreno/a_ollama.ps1 (GGUF Q4_K_M + pieza de visión del qwen3.5 oficial + renderer/parser qwen3.5).
+# Ollama no importa Qwen3.5 desde safetensors sin su motor MLX, así que se convierte antes a GGUF con llama.cpp.
