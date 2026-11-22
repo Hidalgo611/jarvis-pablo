@@ -90,6 +90,8 @@ def main() -> int:
     ap.add_argument("--max-steps", type=int, default=0)
     ap.add_argument("--limit", type=int, default=0)
     ap.add_argument("--no-4bit", action="store_true")
+    ap.add_argument("--sondear", action="store_true",
+                    help="mide la memoria de la gráfica con ejemplos de 1000…6000 tokens y termina (diagnóstico)")
     ap.add_argument("--pocas-herramientas", action="store_true",
                     help="solo para la prueba en CPU: ofrece únicamente las herramientas que usa cada ejemplo (más corto)")
     a = ap.parse_args()
@@ -126,6 +128,24 @@ def main() -> int:
                                              task_type="CAUSAL_LM"))
     model.print_trainable_parameters()
 
+    if a.sondear:
+        inner_ = model.get_base_model()
+        model.train()
+        for T in (1000, 2000, 3000, 4000, 5000, 6000):
+            torch.cuda.empty_cache()
+            torch.cuda.reset_peak_memory_stats()
+            try:
+                ids = torch.randint(1000, 50000, (1, T), device="cuda")
+                with torch.autocast("cuda", dtype=torch.bfloat16):
+                    h = inner_.model(input_ids=ids).last_hidden_state[0, -40:]
+                    loss = torch.nn.functional.cross_entropy(inner_.lm_head(h).float(), ids[0, -40:])
+                loss.backward()
+                model.zero_grad(set_to_none=True)
+                print(f"  sonda {T} tokens: pico {torch.cuda.max_memory_allocated() / 2**30:.2f} GB", flush=True)
+            except torch.OutOfMemoryError:
+                print(f"  sonda {T} tokens: NO CABE (sin memoria)", flush=True)
+                break
+        return 0
     rows = load_rows(a.data, a.limit or None, a.pocas_herramientas)
     data = [e for r in rows for e in encode(tok, r, a.max_len)]
     val = [e for r in load_rows(a.val, (a.limit or 0) // 4 or None, a.pocas_herramientas) for e in encode(tok, r, a.max_len)]
