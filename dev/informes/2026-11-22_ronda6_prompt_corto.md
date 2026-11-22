@@ -1,0 +1,69 @@
+# Banco de pruebas: 21/22 frases bien · modelo qwen3.5:4b · 2026-11-22 14:54 · 743 s
+
+- ✅ **youtube_pantalla_completa** «Ponme un vídeo de Ibai en YouTube» (76.5 s)
+  - Jarvis: Marchando. Ponlo, Pablo. ¿Te gusta este vídeo o prefieres otro?
+  - Herramientas: `[('youtube', {'action': 'play', 'query': 'Ibai'})]`
+- ✅ **youtube_pantalla_completa** «Ponlo en pantalla completa» (10.5 s)
+  - Jarvis: Dalo por hecho. Pantalla completa, Pablo. ¿Te gusta cómo queda?
+  - Herramientas: `[('youtube', {'action': 'fullscreen'})]`
+- ✅ **volumen_10** «Baja el volumen al 10%» (47.4 s)
+  - Jarvis: Listo, el volumen está al diez por ciento.
+  - Herramientas: `[('system', {'action': 'volume_set', 'value': 10})]`
+- ✅ **volumen_10** «Súbelo un poco» (9.6 s)
+  - Jarvis: Subido a un veinte por ciento. ¿Te gusta así?
+  - Herramientas: `[('system', {'action': 'volume_up'})]`
+- ✅ **trabajo_sin_cambiar_de_tema** «Bueno Jarvis, me voy al trabajo» (23.4 s)
+  - Jarvis: Que vaya bien el turno, Pablo.
+  - Herramientas: `[]`
+- ✅ **trabajo_sin_cambiar_de_tema** «Sí, hoy tengo turno de tarde» (5.1 s)
+  - Jarvis: Entendido, Pablo.
+  - Herramientas: `[]`
+- ✅ **nombre_corregido** «Hola Jarvis» (22.9 s)
+  - Jarvis: ¿En qué puedo ayudarte hoy, Antonio?
+  - Herramientas: `[]`
+- ✅ **nombre_corregido** «No, que me llamo Pablo, no Antonio» (33.9 s)
+  - Jarvis: Perdona, Pablo. Ya lo tengo guardado. ¿En qué puedo ayudarte hoy?
+  - Herramientas: `[('remember', {'fact': 'Se llama Pablo', 'replaces': 'Antonio'})]`
+- ✅ **nombre_corregido** «¿Cómo me llamo?» (24.6 s)
+  - Jarvis: Te llamas Pablo.
+  - Herramientas: `[]`
+- ✅ **memoria_reciente** «Esta tarde tengo examen de matemáticas a las seis» (53.1 s)
+  - Jarvis: ¡Que vaya bien el examen, Pablo!
+  - Herramientas: `[]`
+- ✅ **memoria_reciente** «Abre Spotify» (31.2 s)
+  - Jarvis: Listo, Pablo.
+  - Herramientas: `[('open_app', {'name': 'Spotify'})]`
+- ✅ **memoria_reciente** «Oye, ¿a qué hora te dije que tenía el examen?» (6.6 s)
+  - Jarvis: Te dije que era a las seis de la tarde, Pablo.
+  - Herramientas: `[]`
+- ✅ **rutina_gmail_9** «A partir de ahora, todos los días a las 9 de la mañana ábreme Gmail» (69.5 s)
+  - Jarvis: Me pongo con ello. Hecho, a las nueve en punto de la mañana todos los días te abriré el Gmail.
+  - Herramientas: `[('create_routine', {'name': 'Gmail a las 9', 'trigger_type': 'time', 'time': '09:00', 'days': 'todos', 'task': 'abre Gmail'})]`
+- ✅ **rutina_gmail_9** «¿Qué rutinas tengo?» (11.6 s)
+  - Jarvis: Tienes una rutina: «Gmail a las nueve», que se ejecuta todos los días a las nueve en punto de la mañana. ¿Quieres crear alguna más?
+  - Herramientas: `[('list_routines', {})]`
+- ✅ **recordatorio** «Recuérdame en diez minutos que saque la ropa de la lavadora» (51.5 s)
+  - Jarvis: Listo, en diez minutos te aviso.
+  - Herramientas: `[('set_reminder', {'minutes': 10, 'text': 'Que saques la ropa de la lavadora'})]`
+- ❌ **olvidar_dato** «Olvida lo del Barça, que ya no me gusta el fútbol» (34.6 s)
+  - Jarvis: Entendido, Pablo.
+  - Herramientas: `[('remember', {'fact': 'Pablo ya no le gusta el fútbol.', 'replaces': 'Le gusta el Barça'})]`
+  - ✗ esperaba forget {}; usó [('remember', {'fact': 'Pablo ya no le gusta el fútbol.', 'replaces': 'Le gusta el Barça'})]
+- ✅ **tiempo_actual** «¿Qué tiempo hace hoy en Madrid?» (33.0 s)
+  - Jarvis: Lo compruebo ahora mismo. Hace catorce grados en Madrid, con nubes y claros, aunque podría llover un poco a mediodía.
+  - Herramientas: `[('web_search', {'query': 'tiempo Madrid hoy'})]`
+- ✅ **abrir_cerrar** «Abre Discord» (26.7 s)
+  - Jarvis: Listo, Pablo.
+  - Herramientas: `[('open_app', {'name': 'Discord'})]`
+- ✅ **abrir_cerrar** «Ciérralo» (10.1 s)
+  - Jarvis: Listo, Pablo.
+  - Herramientas: `[('close_app', {'name': 'Discord'})]`
+- ✅ **charla_estado_animo** «Estoy un poco cansado hoy» (23.7 s)
+  - Jarvis: Que te canse, Pablo.
+  - Herramientas: `[]`
+- ✅ **interrupcion_no** «Cuéntame un dato curioso sobre el espacio» (33.7 s)
+  - Jarvis: Un segundo, lo miro. ¿Sabías que en Venus un día dura más que un año? Un día venusino son doscientos cuarenta y tres días terrestres, mientras que su año solo es de doscientos veinticinco días.
+  - Herramientas: `[('web_search', {'query': 'dato curioso sobre el espacio'})]`
+- ✅ **interrupcion_no** «No, para, mejor pon música relajante» (48.4 s)
+  - Jarvis: Listo, Pablo. ¿Buscas algo en concreto o prefieres que te ponga una lista de reproducción relajante?
+  - Herramientas: `[('open_app', {'name': 'Spotify'})]`
