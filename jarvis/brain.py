@@ -468,7 +468,7 @@ class Brain:
     def _stream(self, messages: list, on_text: Callable[[str], None]) -> tuple[str, list]:
         content, calls = "", []
         with llm.post("/api/chat", self._payload(messages, True, tool_names=getattr(self, "_run_tools", None)), stream=True,
-                      timeout=(5, 180)) as r:
+                      timeout=(5, 400)) as r:
             r.raise_for_status()
             for line in r.iter_lines():
                 if self.cancel.is_set():
