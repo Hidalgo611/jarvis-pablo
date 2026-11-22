@@ -68,7 +68,8 @@ $commit = [regex]::Match($ver, "commit ([0-9a-f]{7,40})").Groups[1].Value
 if (-not $commit) { throw "No he podido leer la versión del llama-server de Ollama: $ver" }
 Write-Host "  Ollama lleva llama.cpp en el commit $commit"
 $conv = Join-Path $tools "src-$commit"
-if (-not (Test-Path "$conv\convert_hf_to_gguf.py")) {
+if (-not (Test-Path "$conv\convert_hf_to_gguf.py") -or -not (Test-Path "$conv\.completo")) {
+    if (Test-Path $conv) { Remove-Item -Recurse -Force $conv }
     Paso "Descargando el conversor de llama.cpp de esa misma versión ($commit)"
     Invoke-WebRequest "https://github.com/ggml-org/llama.cpp/archive/$commit.zip" -OutFile "$tools\conv.zip"
     if (Test-Path "$tools\tmpc") { Remove-Item -Recurse -Force "$tools\tmpc" -ErrorAction SilentlyContinue }
@@ -79,7 +80,10 @@ if (-not (Test-Path "$conv\convert_hf_to_gguf.py")) {
         foreach ($e in $zip.Entries) {
             $rel = $e.FullName.Substring($e.FullName.IndexOf("/") + 1)
             if (-not $rel -or $rel.EndsWith("/")) { continue }
-            if (($rel -notmatch "/" -and $rel.EndsWith(".py")) -or $rel.StartsWith("gguf-py/")) {
+            # .py de la raíz, gguf-py/ y los paquetes de Python del primer nivel (conversion/, etc.)
+            $top = $rel.Split("/")[0]
+            $pkg = ($rel -match "^[A-Za-z_][A-Za-z0-9_]*/" -and $rel.EndsWith(".py") -and $top -notin @("tests", "examples", "tools", "scripts", "docs", "ggml", "src", "common", "vendor"))
+            if (($rel -notmatch "/" -and $rel.EndsWith(".py")) -or $rel.StartsWith("gguf-py/") -or $pkg) {
                 $dest = Join-Path $conv ($rel -replace "/", "\")
                 New-Item -ItemType Directory -Force (Split-Path $dest) | Out-Null
                 [System.IO.Compression.ZipFileExtensions]::ExtractToFile($e, $dest, $true)
@@ -88,6 +92,7 @@ if (-not (Test-Path "$conv\convert_hf_to_gguf.py")) {
     } finally { $zip.Dispose() }
     Remove-Item -Force "$tools\conv.zip"
     if (-not (Test-Path "$conv\convert_hf_to_gguf.py")) { throw "El zip de llama.cpp no trae convert_hf_to_gguf.py" }
+    Set-Content "$conv\.completo" $commit
 }
 Run $py -m pip install --quiet -e "$conv\gguf-py" sentencepiece protobuf
 
