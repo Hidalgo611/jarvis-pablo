@@ -68,6 +68,14 @@ def encode(tok, ex: dict, max_len: int) -> list[dict]:
     return out
 
 
+def mem(label: str) -> None:
+    """Memoria de la gráfica usada (si pasa de ~7,5 GB, Windows la desborda a la RAM y todo va lentísimo)."""
+    if torch.cuda.is_available():
+        a = torch.cuda.memory_allocated() / 2**30
+        p = torch.cuda.max_memory_allocated() / 2**30
+        print(f"  [memoria GPU {label}: {a:.2f} GB en uso, pico {p:.2f} GB]", flush=True)
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--model", default="Qwen/Qwen3.5-4B")
@@ -101,6 +109,12 @@ def main() -> int:
     model = AutoModelForCausalLM.from_pretrained(a.model, **kw)
     if cuda and "quantization_config" not in kw:
         model.to("cuda")
+    n4 = sum(1 for m in model.modules() if type(m).__name__ == "Linear4bit")
+    nlin = sum(1 for m in model.modules() if isinstance(m, torch.nn.Linear))
+    print(f"Capas comprimidas a 4 bits: {n4} de {n4 + nlin} lineales", flush=True)
+    mem("tras cargar el modelo")
+    if cuda and "quantization_config" in kw and n4 == 0:
+        raise SystemExit("ERROR: bitsandbytes no ha comprimido el modelo (0 capas de 4 bits). Pásale este mensaje a Claude.")
     model.config.use_cache = False
     model.gradient_checkpointing_enable(gradient_checkpointing_kwargs={"use_reentrant": False})
     model.enable_input_require_grads()
@@ -141,13 +155,16 @@ def main() -> int:
         return torch.nn.functional.cross_entropy(logits, lab[1:][pos])
 
     @torch.no_grad()
-    def evaluate():
+    def evaluate(n: int = 40):
         model.eval()
-        ls = [loss_of(d).item() for d in val[:40]]
+        ls = [loss_of(d).item() for d in val[:n]]
         model.train()
         return sum(ls) / max(1, len(ls))
 
     print(f"Pérdida inicial en validación: {evaluate():.3f}", flush=True)
+    mem("tras la validación")
+    if cuda:
+        torch.cuda.empty_cache()
     rnd = random.Random(0)
     order, step, t0 = [], 0, time.time()
     model.train()
@@ -162,6 +179,8 @@ def main() -> int:
             loss = loss_of(data[order.pop()]) / a.accum
             loss.backward()
             acc += loss.item()
+        if step == 0:
+            mem("tras el primer paso (con gradientes)")
         torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
         opt.step()
         sched.step()
