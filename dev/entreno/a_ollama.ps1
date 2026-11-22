@@ -51,14 +51,35 @@ if (-not (Test-Path "$tools\bin\llama-quantize.exe") -or -not (Test-Path "$tools
     if ($q.Name -ne "llama-quantize.exe") { Copy-Item (Join-Path "$tools\bin" $q.Name) "$tools\bin\llama-quantize.exe" }
     Write-Host "  llama.cpp $tag"
 }
-Run $py -m pip install --quiet -e "$tools\src\gguf-py" sentencepiece protobuf
+# El conversor tiene que ser de la MISMA versión de llama.cpp que lleva Ollama dentro: las versiones nuevas
+# guardan algunas piezas combinadas (ssm_beta_alpha, attn_qkv_gate) y el Ollama instalado no las reconoce.
+$srv = @("$env:LOCALAPPDATA\Programs\Ollama\lib\ollama\llama-server.exe", "$env:ProgramFiles\Ollama\lib\ollama\llama-server.exe") |
+    Where-Object { Test-Path $_ } | Select-Object -First 1
+if (-not $srv) {
+    $o = (Get-Command ollama -ErrorAction SilentlyContinue).Source
+    if ($o) { $srv = Get-ChildItem (Split-Path $o) -Recurse -Filter llama-server.exe -ErrorAction SilentlyContinue | Select-Object -First 1 -ExpandProperty FullName }
+}
+if (-not $srv) { throw "No encuentro el llama-server de Ollama para saber su versión" }
+$ver = (& $srv --version 2>&1) -join " "
+$commit = [regex]::Match($ver, "commit ([0-9a-f]{7,40})").Groups[1].Value
+if (-not $commit) { throw "No he podido leer la versión del llama-server de Ollama: $ver" }
+Write-Host "  Ollama lleva llama.cpp en el commit $commit"
+$conv = Join-Path $tools "src-$commit"
+if (-not (Test-Path "$conv\convert_hf_to_gguf.py")) {
+    Paso "Descargando el conversor de llama.cpp de esa misma versión ($commit)"
+    Invoke-WebRequest "https://github.com/ggml-org/llama.cpp/archive/$commit.zip" -OutFile "$tools\conv.zip"
+    Expand-Archive "$tools\conv.zip" "$tools\tmpc" -Force
+    Move-Item (Get-ChildItem "$tools\tmpc" | Select-Object -First 1).FullName $conv
+    Remove-Item -Recurse -Force "$tools\tmpc", "$tools\conv.zip"
+}
+Run $py -m pip install --quiet -e "$conv\gguf-py" sentencepiece protobuf
 
 # 2) safetensors → GGUF (bf16) → Q4_K_M (como el oficial; ~3 GB)
 $dir = Split-Path $Fusionado
 $f16 = Join-Path $dir "$Nombre-bf16.gguf"
 $q4 = Join-Path $dir "$Nombre-q4_k_m.gguf"
 Paso "Convirtiendo a GGUF"
-Run $py "$tools\src\convert_hf_to_gguf.py" $Fusionado --outfile $f16 --outtype bf16
+Run $py "$conv\convert_hf_to_gguf.py" $Fusionado --outfile $f16 --outtype bf16
 Paso "Comprimiendo a 4 bits (Q4_K_M)"
 Run "$tools\bin\llama-quantize.exe" $f16 $q4 Q4_K_M
 Remove-Item $f16
