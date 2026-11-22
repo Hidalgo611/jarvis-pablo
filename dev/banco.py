@@ -24,6 +24,9 @@ stubs_windows.install()
 
 from jarvis import tools  # noqa: E402
 from jarvis.config import settings  # noqa: E402
+
+if os.environ.get("JARVIS_MODEL"):           # comparar modelos: JARVIS_MODEL=jarvis-pablo python dev/banco.py
+    settings.data["model"] = os.environ["JARVIS_MODEL"]
 from jarvis.memory import memory  # noqa: E402
 
 tools.load_all()
