@@ -60,7 +60,10 @@ if (-not $srv) {
     if ($o) { $srv = Get-ChildItem (Split-Path $o) -Recurse -Filter llama-server.exe -ErrorAction SilentlyContinue | Select-Object -First 1 -ExpandProperty FullName }
 }
 if (-not $srv) { throw "No encuentro el llama-server de Ollama para saber su versión" }
-$ver = (& $srv --version 2>&1) -join " "
+# (llama-server escribe la versión por stderr; en PowerShell 5.1 eso cuenta como error con ErrorActionPreference=Stop)
+$prev = $ErrorActionPreference; $ErrorActionPreference = "Continue"
+$ver = (cmd /c "`"$srv`" --version 2>&1") -join " "
+$ErrorActionPreference = $prev
 $commit = [regex]::Match($ver, "commit ([0-9a-f]{7,40})").Groups[1].Value
 if (-not $commit) { throw "No he podido leer la versión del llama-server de Ollama: $ver" }
 Write-Host "  Ollama lleva llama.cpp en el commit $commit"
