@@ -90,6 +90,7 @@ def main() -> int:
     ap.add_argument("--max-steps", type=int, default=0)
     ap.add_argument("--limit", type=int, default=0)
     ap.add_argument("--no-4bit", action="store_true")
+    ap.add_argument("--atencion-lenta", action="store_true", help="permite la atención matemática (solo diagnóstico)")
     ap.add_argument("--sondear", action="store_true",
                     help="mide la memoria de la gráfica con ejemplos de 1000…6000 tokens y termina (diagnóstico)")
     ap.add_argument("--pocas-herramientas", action="store_true",
@@ -101,7 +102,12 @@ def main() -> int:
 
     cuda = torch.cuda.is_available()
     tok = AutoTokenizer.from_pretrained(a.model)
-    kw: dict = {"dtype": torch.bfloat16}
+    kw: dict = {"dtype": torch.bfloat16, "attn_implementation": "sdpa"}
+    if cuda and not a.atencion_lenta:
+        # La atención «matemática» de PyTorch guarda la matriz palabra×palabra: su memoria crece con el CUADRADO
+        # de la longitud (en Windows se elegía esa: 7,9 GB con 4000 tokens). Se prohíbe y se usan los núcleos
+        # eficientes (memoria proporcional a la longitud). También vale durante el recálculo del backward.
+        torch.backends.cuda.enable_math_sdp(False)
     if cuda and not a.no_4bit:
         from transformers import BitsAndBytesConfig
         kw["quantization_config"] = BitsAndBytesConfig(load_in_4bit=True, bnb_4bit_quant_type="nf4",
@@ -111,6 +117,9 @@ def main() -> int:
     model = AutoModelForCausalLM.from_pretrained(a.model, **kw)
     if cuda and "quantization_config" not in kw:
         model.to("cuda")
+    print("Atención:", getattr(model.config, "_attn_implementation", "?"),
+          "| núcleos SDPA: flash", torch.backends.cuda.flash_sdp_enabled(), "eficiente",
+          torch.backends.cuda.mem_efficient_sdp_enabled(), "matemático", torch.backends.cuda.math_sdp_enabled(), flush=True)
     n4 = sum(1 for m in model.modules() if type(m).__name__ == "Linear4bit")
     nlin = sum(1 for m in model.modules() if isinstance(m, torch.nn.Linear))
     print(f"Capas comprimidas a 4 bits: {n4} de {n4 + nlin} lineales", flush=True)
@@ -144,6 +153,9 @@ def main() -> int:
                 print(f"  sonda {T} tokens: pico {torch.cuda.max_memory_allocated() / 2**30:.2f} GB", flush=True)
             except torch.OutOfMemoryError:
                 print(f"  sonda {T} tokens: NO CABE (sin memoria)", flush=True)
+                break
+            except RuntimeError as e:
+                print(f"  sonda {T} tokens: ERROR {str(e)[:300]}", flush=True)
                 break
         return 0
     rows = load_rows(a.data, a.limit or None, a.pocas_herramientas)
