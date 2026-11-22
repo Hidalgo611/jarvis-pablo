@@ -459,28 +459,28 @@ def build(gen) -> dict:
         memory.add_fact(f)
     if R.random() < 0.15:
         memory.set_summary(f"{name} ha comentado que hoy tiene turno de tarde. Le pidió poner música para estudiar.")
-    system = B.system_prompt()
-    msgs, recent = [], []
+    msgs, recent, rows = [], [], []
     ctx = Reloj(hour)
     for i, (u, note, steps) in enumerate(out):
         u = voz(u.replace("{u}", name))
         notes = ""
         if note == "NAME":
-            mal = re.search(r"no (soy|me llamo) (\w+)|, no (\w+)$", u)
             notes = (f"(Nota interna: se llama {name}. Ya está guardado y corregido en tu memoria: llámale {name} desde ahora "
                      f"y nunca de otra forma. Si antes le llamaste de otra manera, discúlpate en pocas palabras.)")
-            del mal
-        elif note == "RECALL" or note == "CORR":
-            notes = B.understand(u) if note == "CORR" else (
-                "(Nota interna: te pregunta por algo que te dijo antes. La respuesta está en los mensajes anteriores "
-                "de esta conversación o en tus datos: búscala ahí y contéstale con ese dato exacto. Si de verdad no "
-                "está, dile que no lo recuerdas.)")
+        elif note == "RECALL":
+            notes = ("(Nota interna: te pregunta por algo que te dijo antes. La respuesta está en los mensajes anteriores "
+                     "de esta conversación o en tus datos: búscala ahí y contéstale con ese dato exacto. Si de verdad no "
+                     "está, dile que no lo recuerdas.)")
+        elif note == "CORR":
+            notes = B.understand(u)
         elif note.startswith("INTERRUPT:"):
             notes = B.understand(u, note.split(":", 1)[1])
         elif note:
             notes = note
-        content = f"{ctx()} {u}" + (f"\n{notes}" if notes else "")
-        msgs.append({"role": "user", "content": content})
+        # lo que Jarvis le ofrece en ESTA frase: herramientas según lo dicho y lo usado antes (como en brain.run)
+        names = tools.select(u, list(recent))
+        start = len(msgs)
+        msgs.append({"role": "user", "content": f"{ctx()} {u}" + (f"\n{notes}" if notes else "")})
         for st in steps:
             if st[0] == "call":
                 calls, results = st[1], st[2]
@@ -489,17 +489,14 @@ def build(gen) -> dict:
                 for c, r in zip(calls, results):
                     msgs.append({"role": "tool", "name": c["name"], "content": r})
                     recent.append(c["name"])
+                    if c["name"] not in names:   # si el ejemplo la usa, tiene que estar ofrecida
+                        names.append(c["name"])
             else:
                 msgs.append({"role": "assistant", "content": st[1].replace("{a}", name).replace("{u}", name)
                              .replace("{hora}", ctx.now)})
-        last_user = u
-    tool_names = tools.select(last_user, recent)
-    for m in msgs:   # toda herramienta usada tiene que estar en la lista ofrecida
-        for c in m.get("tool_calls") or []:
-            if c["function"]["name"] not in tool_names:
-                tool_names.append(c["function"]["name"])
-    return {"messages": [{"role": "system", "content": system}] + msgs, "tools": tools.schemas(tool_names),
-            "gen": gen.__name__}
+        rows.append({"messages": [{"role": "system", "content": B.system_prompt(names)}] + [dict(m) for m in msgs],
+                     "tools": tools.schemas(names), "gen": gen.__name__, "turn": i, "train_from": start + 1})
+    return rows
 
 
 def main() -> int:
@@ -509,15 +506,17 @@ def main() -> int:
     a = ap.parse_args()
     os.makedirs(a.out, exist_ok=True)
     pool = [g for g, w in GENS for _ in range(w)]
-    rows = [build(pick(pool)) for _ in range(a.n)]
-    R.shuffle(rows)
+    convs = [build(pick(pool)) for _ in range(a.n)]
+    R.shuffle(convs)
     nval = max(20, a.n // 20)
-    for name, part in (("jarvis_train.jsonl", rows[nval:]), ("jarvis_val.jsonl", rows[:nval])):
+    for name, part in (("jarvis_train.jsonl", convs[nval:]), ("jarvis_val.jsonl", convs[:nval])):
         with open(os.path.join(a.out, name), "w", encoding="utf-8") as f:
-            for r in part:
-                f.write(json.dumps(r, ensure_ascii=False) + "\n")
+            for conv in part:                   # un ejemplo por frase (lo de antes va de contexto)
+                for r in conv:
+                    f.write(json.dumps(r, ensure_ascii=False) + "\n")
+    rows = [r for c in convs for r in c]
     from collections import Counter
-    print(f"{len(rows)} conversaciones ({len(rows) - nval} entrenamiento, {nval} validación)")
+    print(f"{len(convs)} conversaciones → {len(rows)} ejemplos (validación: {nval} conversaciones)")
     print(Counter(r["gen"] for r in rows).most_common())
     return 0
 

@@ -50,8 +50,9 @@ def N(desc: str) -> dict:
     return {"type": "number", "description": desc}
 
 
-CORE = ["open_app", "close_app", "open_website", "web_search", "system", "screen_click", "look_at_screen",
-        "remember", "forget", "browser", "focus_window", "plan"]
+# Las que van SIEMPRE. El resto solo si la frase habla de ello (cada herramienta son ~100-300 tokens que el modelo
+# lee en cada frase: menos herramientas = responde antes y se equivoca menos al elegir).
+CORE = ["open_app", "close_app", "open_website", "web_search", "system", "remember", "forget"]
 # grupo -> (palabras clave, herramientas)
 GROUPS = {
     "youtube": (r"youtube|yutub|v[ií]deo|canal|shorts|directo|reproduc|tr[aá]iler|canci[oó]n|anuncio|calidad|pantalla completa|"
@@ -72,7 +73,15 @@ GROUPS = {
                 r"martes|mi[eé]rcoles|jueves|viernes|s[aá]bados|domingos)|todas las (ma[ñn]anas|noches|tardes)|siempre que|"
                 r"cuando (encienda|arranque|diga)|al encender|programa(r|me)? (que|para)|diariamente",
                 ["create_routine", "list_routines", "delete_routine"]),
-    "jarvis": (r"rutina|voz|habla m[aá]s|ajuste|configura|actualiza|versi[oó]n|habilidad|"
+    "pantalla": (r"\b(ah[ií]|aqu[ií]|esto|esta|este|eso|esa|ese|pantalla|ventana|bot[oó]n|icono|clic|cl[ií]ca|pulsa|"
+                 r"pincha|marca|selecciona|mira|ves|minimiza|maximiza|cambia a|ve a|tr[aá]e|pon delante|men[uú]|pesta[ñn]a)\b",
+                 ["screen_click", "look_at_screen", "focus_window"]),
+    "navegador": (r"navegador|pesta[ñn]a|p[aá]gina|web\b|enlace|link|scroll|baja la p|sube la p|desliza|l[eé]e(me)? |"
+                  r"escribe en|rellena|formulario|google|zoom|atr[aá]s|adelante|recarga|inicia sesi[oó]n|chrome|edge",
+                  ["browser"]),
+    "plan": (r"\by (luego|despu[eé]s|tambi[eé]n|adem[aá]s)\b|\bprimero\b|\bdespu[eé]s\b|\by (abre|pon|cierra|busca|haz|m[aá]ndame|"
+             r"escribe|baja|sube)\b", ["plan"]),
+    "jarvis": (r"voz|habla m[aá]s|ajuste|configura|actualiza|versi[oó]n|habilidad|"
                r"aprend|sabes de m[ií]|olvida|qui[eé]n eres|c[oó]mo te llamas|estado del (pc|ordenador|sistema)|bater[ií]a|memoria ram",
                ["create_routine", "list_routines", "delete_routine", "voices", "settings", "check_updates", "create_skill",
                 "undo_skill", "about", "what_you_know", "forget", "system_status"]),

@@ -43,9 +43,11 @@ def encode(tok, ex: dict, max_len: int) -> list[dict]:
         return tok.apply_chat_template(m, tools=tools, tokenize=False, add_generation_prompt=gen, enable_thinking=False)
 
     users = [i for i, m in enumerate(msgs) if m["role"] == "user"]
+    if "train_from" in ex:                      # datos nuevos: un ejemplo por frase, se entrena solo la última
+        users = [ex["train_from"] - 1]
     out = []
     for k, u in enumerate(users):
-        end = users[k + 1] if k + 1 < len(users) else len(msgs)
+        end = users[k + 1] if k + 1 < len(users) and "train_from" not in ex else len(msgs)
         sub = msgs[:end]
         full = render(sub)
         spans = []
@@ -86,11 +88,12 @@ def main() -> int:
     ap.add_argument("--lr", type=float, default=1e-4)
     ap.add_argument("--rank", type=int, default=16)
     ap.add_argument("--accum", type=int, default=8, help="ejemplos por paso de optimización")
-    ap.add_argument("--max-len", type=int, default=7168)
+    ap.add_argument("--max-len", type=int, default=3600, help="ejemplos más largos se descartan (8 GB: ~3600)")
     ap.add_argument("--max-steps", type=int, default=0)
     ap.add_argument("--limit", type=int, default=0)
     ap.add_argument("--no-4bit", action="store_true")
-    ap.add_argument("--atencion-lenta", action="store_true", help="permite la atención matemática (solo diagnóstico)")
+    ap.add_argument("--atencion-eficiente", action="store_true",
+                    help="prohíbe la atención matemática (en Windows con Qwen3.5 da «Invalid backend»)")
     ap.add_argument("--sondear", action="store_true",
                     help="mide la memoria de la gráfica con ejemplos de 1000…6000 tokens y termina (diagnóstico)")
     ap.add_argument("--pocas-herramientas", action="store_true",
@@ -103,7 +106,7 @@ def main() -> int:
     cuda = torch.cuda.is_available()
     tok = AutoTokenizer.from_pretrained(a.model)
     kw: dict = {"dtype": torch.bfloat16, "attn_implementation": "sdpa"}
-    if cuda and not a.atencion_lenta:
+    if cuda and a.atencion_eficiente:
         # La atención «matemática» de PyTorch guarda la matriz palabra×palabra: su memoria crece con el CUADRADO
         # de la longitud (en Windows se elegía esa: 7,9 GB con 4000 tokens). Se prohíbe y se usan los núcleos
         # eficientes (memoria proporcional a la longitud). También vale durante el recálculo del backward.
