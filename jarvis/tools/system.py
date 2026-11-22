@@ -292,23 +292,58 @@ def mouse(action: str, x: float | None = None, y: float | None = None) -> str:
 
 # ------------------------------------------------------------------ sistema
 def _volume_iface():
+    """Control de volumen de Windows. Las herramientas corren en un hilo aparte: COM hay que iniciarlo en cada hilo."""
+    import comtypes
+    try:
+        comtypes.CoInitialize()
+    except OSError:
+        pass
     from pycaw.pycaw import AudioUtilities
-    return AudioUtilities.GetSpeakers().EndpointVolume
+    dev = AudioUtilities.GetSpeakers()
+    ep = getattr(dev, "EndpointVolume", None)       # pycaw moderno
+    if ep is not None:
+        return ep
+    from ctypes import POINTER, cast
+    from comtypes import CLSCTX_ALL
+    from pycaw.pycaw import IAudioEndpointVolume      # pycaw antiguo
+    return cast(dev.Activate(IAudioEndpointVolume._iid_, CLSCTX_ALL, None), POINTER(IAudioEndpointVolume))
+
+
+def _volume_keys(action: str, value: float | None) -> str:
+    """Plan B con las teclas multimedia (cada pulsación son 2 puntos en Windows)."""
+    if action == "volume_set" and value is not None:
+        for _ in range(50):
+            _key(VK["volume_down"])
+        for _ in range(int(round(max(0, min(100, value)) / 2))):
+            _key(VK["volume_up"])
+        return f"Volumen al {int(round(value / 2) * 2)} % (aproximado)."
+    if action in ("volume_up", "volume_down"):
+        for _ in range(max(1, int((value or 10) / 2))):
+            _key(VK[action])
+        return "Volumen " + ("subido." if action == "volume_up" else "bajado.")
+    _key(VK["mute"])
+    return "Silencio activado/desactivado."
 
 
 @tool("system", "Controla el PC: volumen, música (reproducir/pausar/siguiente), brillo, bloquear, suspender, apagar, reiniciar, captura de pantalla, modo oscuro/claro, minimizar todo.",
       {"action": S("Acción", ["volume_set", "volume_up", "volume_down", "mute", "unmute", "media_play_pause", "media_next",
                               "media_previous", "brightness_set", "lock", "sleep", "shutdown", "restart", "cancel_shutdown",
                               "screenshot", "dark_mode", "light_mode", "show_desktop", "empty_recycle_bin"]),
-       "value": N("Valor 0-100 para volumen o brillo")}, ["action"],
+       "value": N("Valor 0-100 para volumen o brillo (p. ej. «al 10 %» → volume_set con value=10)")}, ["action"],
       label=lambda a: {"screenshot": "Capturando pantalla", "lock": "Bloqueando el equipo"}.get(a.get("action"), "Ajustando el sistema"))
 def system(action: str, value: float | None = None) -> str:
     if action.startswith("volume") or action in ("mute", "unmute"):
+        if isinstance(value, str):
+            try:
+                value = float(value.strip(" %"))
+            except ValueError:
+                value = None
         try:
             v = _volume_iface()
             cur = v.GetMasterVolumeLevelScalar()
             if action == "volume_set" and value is not None:
                 v.SetMasterVolumeLevelScalar(max(0.0, min(1.0, value / 100)), None)
+                v.SetMute(0, None)
             elif action == "volume_up":
                 v.SetMasterVolumeLevelScalar(min(1.0, cur + (value or 10) / 100), None)
             elif action == "volume_down":
@@ -317,10 +352,13 @@ def system(action: str, value: float | None = None) -> str:
                 v.SetMute(1, None)
             elif action == "unmute":
                 v.SetMute(0, None)
-            return f"Volumen al {round(v.GetMasterVolumeLevelScalar() * 100)} %."
+            now = round(v.GetMasterVolumeLevelScalar() * 100)
+            if action == "volume_set" and value is not None and abs(now - value) > 2:
+                return f"ERROR: he intentado ponerlo al {value:.0f} % pero está al {now} %."
+            return f"Volumen al {now} %." + (" (silenciado)" if v.GetMute() else "")
         except Exception:
-            _key(VK.get(action, VK["volume_up"]))
-            return "Hecho."
+            log.exception("volumen por COM; uso las teclas multimedia")
+            return _volume_keys(action, value)
     if action.startswith("media_"):
         _key(VK[action.removeprefix("media_")])
         return "Hecho."

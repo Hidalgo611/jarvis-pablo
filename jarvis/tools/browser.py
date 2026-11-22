@@ -293,13 +293,25 @@ class Browser:
         self.browse = {"sel": sel, "i": 0, "every": every, "next": time.time() + 0.5, "title": "", "misses": 0}
 
     # ---- música de fondo (presentación): pestaña aparte con la ventana minimizada ----
-    def _minimize(self, page) -> None:
+    def _window_state(self, page, state: str) -> bool:
+        """Estado de la VENTANA del navegador (normal, maximized, minimized, fullscreen). Con automatización, F11 y la
+        «f» de YouTube solo llenan la ventana: la pantalla completa de verdad hay que pedírsela al navegador."""
         try:
             cdp = self.ctx.new_cdp_session(page)
             wid = cdp.send("Browser.getWindowForTarget")["windowId"]
-            cdp.send("Browser.setWindowBounds", {"windowId": wid, "bounds": {"windowState": "minimized"}})
+            cur = cdp.send("Browser.getWindowBounds", {"windowId": wid})["bounds"].get("windowState")
+            if cur == state:
+                return True
+            if cur in ("fullscreen", "minimized") and state != "normal":
+                cdp.send("Browser.setWindowBounds", {"windowId": wid, "bounds": {"windowState": "normal"}})
+            cdp.send("Browser.setWindowBounds", {"windowId": wid, "bounds": {"windowState": state}})
+            return True
         except Exception:
-            log.exception("minimizar")
+            log.exception("estado de ventana %s", state)
+            return False
+
+    def _minimize(self, page) -> None:
+        self._window_state(page, "minimized")
 
     def _music_start(self, url: str, search: str) -> bool:
         prev = self._ensure()
@@ -528,7 +540,11 @@ def browser_tool(action: str, value: str | None = None) -> str:
         key = "Control+Equal" if action == "zoom_in" else "Control+Minus"
         return b.call(lambda: (b._ensure().keyboard.press(key), "Hecho.")[1])
     if action == "fullscreen":
-        return b.call(lambda: (b._ensure().keyboard.press("F11"), "Hecho.")[1])
+        def fs():
+            p = b._ensure()
+            p.bring_to_front()
+            return "Navegador en pantalla completa." if b._window_state(p, "fullscreen") else "ERROR: no he podido."
+        return b.call(fs)
     return "Acción desconocida."
 
 
@@ -723,9 +739,27 @@ def youtube(action: str, query: str | None = None, value: float | None = None, s
     if action == "play_pause":
         return _yt_key("k")
     if action == "fullscreen":
-        return _yt_key("f")
+        def fs():
+            p = _yt_page()
+            p.bring_to_front()
+            _yt_focus_player(p)
+            if not p.evaluate("() => !!document.fullscreenElement"):
+                p.keyboard.press("f")              # el reproductor ocupa toda la ventana…
+                time.sleep(0.4)
+            ok = browser._window_state(p, "fullscreen")   # …y la ventana, toda la pantalla (sin pestañas ni barra de tareas)
+            inner = p.evaluate("() => [window.innerWidth, window.innerHeight, screen.width, screen.height, !!document.fullscreenElement]")
+            if ok and inner[4] and inner[0] >= inner[2] - 2 and inner[1] >= inner[3] - 2:
+                return "Vídeo en pantalla completa."
+            return f"ERROR: la pantalla completa no ha quedado bien (ventana {inner[0]}x{inner[1]}, pantalla {inner[2]}x{inner[3]})."
+        return browser.call(fs)
     if action == "exit_fullscreen":
-        return _yt_key("Escape")
+        def ex():
+            p = _yt_page()
+            if p.evaluate("() => !!document.fullscreenElement"):
+                p.keyboard.press("Escape")
+            browser._window_state(p, "maximized")
+            return "Pantalla completa quitada."
+        return browser.call(ex)
     if action == "mute" or action == "unmute":
         return _yt_key("m")
     if action == "captions":
