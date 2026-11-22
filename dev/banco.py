@@ -185,6 +185,11 @@ def check_turn(t: dict, calls: list, reply: str) -> list[str]:
         errs.append(f"demasiado largo ({len(reply.split())} palabras)")
     if not reply.strip():
         errs.append("no ha dicho nada")
+    # reglas generales para todas las frases
+    if re.search(r"\b20\d\d\b|dos mil veinti", reply) and not re.search(r"20\d\d", t["say"]):
+        errs.append("dice el año sin venir a cuento")
+    if re.search(r"(?i)\b(veint[ií]|veintena) por ciento|\bveint[ií]\b", reply):
+        errs.append("número mal escrito")
     return errs
 
 
@@ -218,7 +223,8 @@ def main() -> int:
                 said.append(s)
             brain.run(t["say"], say, lambda *a: None, lambda *a: None)
             dt = time.time() - t0
-            reply = " ".join(said)
+            from jarvis.tts import clean_for_speech
+            reply = clean_for_speech(" ".join(said))   # lo que sonaría por el altavoz
             errs = check_turn(t, list(CALLS), reply)
             r = {"scenario": sc["name"], "say": t["say"], "reply": reply, "tools": [(n, a) for n, a, _ in CALLS],
                  "seconds": round(dt, 1), "first_speech": round(first[0], 1) if first[0] else None, "errors": errs}

@@ -32,6 +32,19 @@ QUICK_TOOLS = {"remember", "forget", "what_you_know", "about", "settings", "list
 
 ACKS = ["Enseguida, {a}.", "A la orden.", "Ahora mismo.", "Me pongo con ello.", "Por supuesto, {a}.",
         "Marchando.", "Dalo por hecho.", "Vamos allá."]
+# si va a buscar o mirar algo (no a «hacer»), el arranque tiene que sonar a eso
+INFO_TOOLS = {"web_search", "web_research", "email_check", "calendar_today", "drive_search", "daily_briefing",
+              "notifications", "look_at_screen", "find_files", "research_report"}
+INFO_ACKS = ["Déjame mirarlo.", "Un segundo, lo miro.", "Lo compruebo ahora mismo.", "Voy a ver."]
+# preguntas de relleno al final («¿Quieres algo más?»): no aportan y cansan; no se dicen
+FILLER_RE = re.compile(r"^¿\s*(?:hay\s+)?(?:quieres|necesitas|deseas|te\s+(?:ayudo|puedo|gustar[ií]a)|puedo|algo\s+m[aá]s|"
+                       r"en\s+qu[eé]\s+m[aá]s|alguna\s+otra|otra\s+cosa|hay\s+algo)[^?]{0,90}"
+                       r"(?:algo\s+m[aá]s|otra\s+cosa|m[aá]s\s+(?:hoy|cosas)|alguna\s+otra\s+cosa|ayud\w*(?:\s+con\s+algo)?\s*(?:m[aá]s)?|"
+                       r"en\s+algo\s+m[aá]s|de\s+nuevo|algo\s+(?:hoy|en\s+mente)|para\s+ti)\s*[,]?\s*(?:\w+)?\s*\?$", re.I)
+
+
+def is_filler(sentence: str) -> bool:
+    return bool(FILLER_RE.match(sentence.strip()))
 
 
 def now_text() -> str:
@@ -64,7 +77,8 @@ def last_interaction() -> float:
 def context_prefix() -> str:
     """Contexto temporal que va DENTRO del mensaje del usuario (así el prompt de sistema no cambia y la caché vale)."""
     lt = time.localtime()
-    head = f"[contexto, no lo leas: {DIAS[lt.tm_wday]} {lt.tm_mday} de {MESES[lt.tm_mon - 1]} de {lt.tm_year}, {lt.tm_hour:02d}:{lt.tm_min:02d}"
+    # sin el año: un modelo pequeño tiende a repetirlo («¿listo para el domingo de 2026?»)
+    head = f"[contexto, no lo leas: {DIAS[lt.tm_wday]} {lt.tm_mday} de {MESES[lt.tm_mon - 1]}, {lt.tm_hour:02d}:{lt.tm_min:02d}"
     last = last_interaction()
     gap = time.time() - last if last else 0
     if last and gap > 30 * 60:
@@ -169,9 +183,18 @@ LAS REGLAS MÁS IMPORTANTES:
 Cada mensaje suyo empieza con [contexto…] (fecha y hora reales y a veces cuánto llevabais sin hablar) y a veces trae (Nota interna…). Son para ti: tenlos en cuenta, pero NUNCA los leas ni digas la fecha u hora salvo que te las pregunte.
 
 CÓMO HABLAS (todo se dice en voz alta):
-- Español de España, natural, cálido y breve: 1 a 3 frases. Nada de listas, markdown, emojis ni enlaces.
-- Escribe números y horas como se dicen. No repitas la pregunta. No digas que eres un modelo de lenguaje.
+- Español de España, natural, cálido y breve: 1 o 2 frases. Nada de listas, markdown, emojis ni enlaces.
+- Escribe los números y las horas con cifras (20 %, 14 grados, 9:00): la voz los lee bien. No repitas la pregunta. No digas que eres un modelo de lenguaje.
+- NO acabes con preguntas de relleno («¿Quieres algo más?», «¿Te ayudo con algo más?»). Haz una pregunta solo si de verdad necesitas un dato.
+- No digas la fecha ni el año, ni preguntes cosas que no vienen a cuento: si no tienes nada útil que añadir, termina.
 - Si antes te contó que iba a hacer algo (trabajar, entrenar, un examen…) y vuelve tras un rato, pregúntale qué tal le fue.
+
+EJEMPLOS DE BUENAS RESPUESTAS:
+- «Me voy al trabajo» → «Que vaya bien el turno, {a}. Aquí estaré cuando vuelvas.»
+- «Estoy cansado» → «Normal, llevas un día largo. Si quieres, te pongo algo de música tranquila.»
+- «Baja el volumen al 10 %» → (llamada a `system` volume_set 10) → «Listo, al 10 %.»
+- «Ponme un vídeo de Ibai» → (llamada a `youtube` play «Ibai») → «Ahí lo tienes.»
+- «No, me llamo Pablo» → «Perdona, Pablo. No se me vuelve a olvidar.»
 
 CÓMO ENTIENDES:
 - Te llega por reconocimiento de voz: puede haber palabras mal reconocidas. Deduce lo que quiso decir por el contexto; no pidas que lo repita salvo que sea imposible o peligroso.
@@ -185,7 +208,7 @@ CÓMO ACTÚAS:
 - Si dicta un texto o pide un documento con contenido que ya conoces: `write_document`.
 - Datos actuales (noticias, tiempo, resultados, precios): `web_search` o `web_research`. Nunca respondas de memoria.
 - AUTOMATIZACIONES: «a partir de ahora / todos los días / cada lunes / cada vez que diga… haz X» → `create_routine` con `task` = la orden tal como la diría él («abre Gmail», «pon música relajante») y la hora o la frase. Después confírmale cuándo se ejecutará. «¿Qué rutinas tengo?» → `list_routines`; «quita la rutina…» → `delete_routine`.
-- YouTube (`youtube`): "pon X" → play. "busca X" → search (solo enseña resultados; NO los recorras). "Abre el canal de X" → open_channel con query=X (el NOMBRE del canal; sin query = canal del vídeo actual) y, si pide una sección, section=vídeos/shorts/directos. Ya dentro de un canal, "sección vídeos" → channel_tab con section. "Pon el que se llama…" → play_title. "Ve bajando / enséñamelos uno a uno" → browse_results y dile que diga "ese". No abras YouTube antes de buscar.
+- YouTube (`youtube`): "pon X", "ponme un vídeo de X" → play (directamente, sin preguntar cuál). "busca X" → search (solo enseña resultados; NO los recorras). "Abre el canal de X" → open_channel con query=X (el NOMBRE del canal; sin query = canal del vídeo actual) y, si pide una sección, section=vídeos/shorts/directos. Ya dentro de un canal, "sección vídeos" → channel_tab con section. "Pon el que se llama…" → play_title. "Ve bajando / enséñamelos uno a uno" → browse_results y dile que diga "ese". No abras YouTube antes de buscar.
 - Correo, agenda, Drive: `email_check`, `calendar_today`, `drive_search` (usan tu navegador; si no ha iniciado sesión, díselo). «¿Qué tengo hoy?», «resumen del día», «buenos días» → `daily_briefing` y cuéntalo en 3-5 frases naturales.
 - Notificaciones: anuncia de quién son, pero NO leas el contenido de mensajes privados salvo que él te lo pida («léemelo», «¿qué dice?») → `notifications` con read_content=true.
 - Si te dice su ciudad, guárdala con `settings` (key=city) además de `remember`.
@@ -205,8 +228,10 @@ ACTION_RE = re.compile(r"\b(abre|abrir|ábreme|cierra|cerrar|pon|ponme|ponlo|qui
                        r"entra|ve a|llévame|navega|descarga|guarda|exporta|recuérdame|programa|enséñame|muéstrame|mira|"
                        r"salta|avanza|retrocede|minimiza|maximiza|captura|vacía|elimina|borra|manda|envía|lee|"
                        r"selecciona|clica|haz clic|pulsa)\b", re.I)
-CLAIM_RE = re.compile(r"\b(hecho|listo|abiert[oa]|cerrad[oa]|puesto|ya está|he abierto|he puesto|he cerrado|"
-                      r"he buscado|en marcha|reproduciendo|ahí lo tienes|ahí tienes)\b", re.I)
+CLAIM_RE = re.compile(r"\b(hecho|listo|abiert[oa]|cerrad[oa]|puest[oa]|ya est[aá]|he (abierto|puesto|cerrado|buscado|bajado|"
+                      r"subido|creado|cambiado|activado|desactivado|programado|guardado|apagado|quitado)|en marcha|"
+                      r"reproduciendo|sonando|(ah[ií]|aqu[ií]) (lo |la |los |las )?tienes|te (lo |la )?(he puesto|pongo ya)|"
+                      r"ya suena|ya lo tienes|ajustado|bajado|subido)\b", re.I)
 
 TOOL_TAG = re.compile(r"<tool_call>\s*(\{.*?\})\s*</tool_call>", re.S)
 TOOL_TEXT = re.compile(r"^\s*`?([a-z_]{3,30})`?\s*(\{.*\}|\(.*\)|\"[^\"]*\")\s*$", re.S)
@@ -474,6 +499,9 @@ class Brain:
         _say = say
 
         def say(sent: str) -> None:
+            if is_filler(sent):
+                log.info("pregunta de relleno omitida: %s", sent)
+                return
             self.spoken.append(sent)
             _say(sent)
 
@@ -550,7 +578,8 @@ class Brain:
                     break
                 quick = all(c.get("function", {}).get("name") in QUICK_TOOLS for c in calls)
                 if not spoken_any and not quick:
-                    say(random.choice(ACKS).format(a=a))
+                    info = all(c.get("function", {}).get("name") in INFO_TOOLS for c in calls)
+                    say(random.choice(INFO_ACKS if info else ACKS).format(a=a))
                     spoken_any = True
                 for c in calls:
                     fn = c.get("function", {})

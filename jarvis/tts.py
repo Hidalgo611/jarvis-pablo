@@ -34,6 +34,70 @@ def _num(n: int) -> str:
     return _D[d] + ("" if u == 0 else " y " + ("un" if u == 1 else _U[u]))
 
 
+_C = {1: "ciento", 2: "doscientos", 3: "trescientos", 4: "cuatrocientos", 5: "quinientos", 6: "seiscientos",
+      7: "setecientos", 8: "ochocientos", 9: "novecientos"}
+_D.update({6: "sesenta", 7: "setenta", 8: "ochenta", 9: "noventa"})
+
+
+def num_words(n: int, masc: bool = True) -> str:
+    """Número entero en palabras (0 – 999 999 999), p. ej. 21 → «veintiún»/«veintiuno» según vaya delante de algo."""
+    if n < 0:
+        return "menos " + num_words(-n, masc)
+    if n < 30:
+        w = _U[n]
+        if n == 1:
+            return "uno" if masc else "una"
+        return w
+    if n < 100:
+        d, u = divmod(n, 10)
+        return _D[d] + ("" if u == 0 else " y " + ("uno" if u == 1 else _U[u]))
+    if n < 1000:
+        c, r = divmod(n, 100)
+        if n == 100:
+            return "cien"
+        return _C[c] + ("" if r == 0 else " " + num_words(r, masc))
+    if n < 1_000_000:
+        m, r = divmod(n, 1000)
+        head = "mil" if m == 1 else num_words(m).removesuffix("uno") + ("ún" if num_words(m).endswith("uno") else "") + " mil"
+        head = head.replace("veintiún", "veintiún").replace("  ", " ")
+        return head + ("" if r == 0 else " " + num_words(r, masc))
+    mm, r = divmod(n, 1_000_000)
+    head = "un millón" if mm == 1 else num_words(mm).removesuffix("uno").rstrip() + (" un" if num_words(mm).endswith(" uno") else "") + " millones"
+    return re.sub(r"\s+", " ", head + ("" if r == 0 else " " + num_words(r, masc)))
+
+
+def _number(m: re.Match) -> str:
+    raw = m.group(0)
+    neg = raw.startswith("-")
+    raw = raw.lstrip("-")
+    if re.fullmatch(r"\d{1,3}(\.\d{3})+", raw):            # 1.500 (miles con punto)
+        raw = raw.replace(".", "")
+    if "," in raw or "." in raw:
+        ent, dec = re.split(r"[,.]", raw, maxsplit=1)
+        dec = dec.rstrip("0")
+        out = num_words(int(ent)) + ((" coma " + (" ".join(num_words(int(c)) for c in dec) if dec.startswith("0")
+                                                 else num_words(int(dec)))) if dec else "")
+    else:
+        if len(raw) > 9:
+            return m.group(0)
+        out = num_words(int(raw))
+    return ("menos " if neg else "") + out
+
+
+def numbers_to_words(t: str) -> str:
+    t = re.sub(r"(\d)\s*%", r"\1 por ciento", t)
+    t = re.sub(r"(\d)\s*º?\s*°\s*C\b|(\d)\s*ºC\b", lambda m: (m.group(1) or m.group(2)) + " grados", t)
+    t = re.sub(r"(\d)\s*€", r"\1 euros", t)
+    t = re.sub(r"(\d)\s*km/h\b", r"\1 kilómetros por hora", t)
+    t = re.sub(r"(?<![\w.,])-?\d+(?:[.,]\d+)*(?![\w])", _number, t)
+    # «uno» delante de un sustantivo → «un» («1 correo» → «un correo», «21 minutos» → «veintiún minutos»)
+    t = re.sub(r"\b(veinti)?uno (?!(y|o|u|de|del|en|a|al|que|más|menos|por\s(?!ciento)|coma|entre|con)\b)(?=[a-záéíóúñ])",
+               lambda m: ("veintiún " if m.group(1) else "un "), t)
+    t = re.sub(r"\b(treinta|cuarenta|cincuenta|sesenta|setenta|ochenta|noventa) y un(o)? (?=por ciento|grados|euros)",
+               r"\1 y un ", t)
+    return t
+
+
 def _hora(m: re.Match) -> str:
     h, mi = int(m.group(1)), int(m.group(2))
     if h > 23 or mi > 59:
@@ -62,6 +126,7 @@ def clean_for_speech(text: str) -> str:
     t = re.sub(r"^\s*[-•]\s*", "", t, flags=re.M)
     t = re.sub(r"[\U0001F300-\U0001FAFF☀-➿]", "", t)
     t = t.replace("J.A.R.V.I.S.", "Jarvis").replace("JARVIS", "Jarvis")
+    t = numbers_to_words(t)
     t = re.sub(r"\s+", " ", t)
     return t.strip()
 
