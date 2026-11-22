@@ -71,9 +71,23 @@ $conv = Join-Path $tools "src-$commit"
 if (-not (Test-Path "$conv\convert_hf_to_gguf.py")) {
     Paso "Descargando el conversor de llama.cpp de esa misma versión ($commit)"
     Invoke-WebRequest "https://github.com/ggml-org/llama.cpp/archive/$commit.zip" -OutFile "$tools\conv.zip"
-    Expand-Archive "$tools\conv.zip" "$tools\tmpc" -Force
-    Move-Item (Get-ChildItem "$tools\tmpc" | Select-Object -First 1).FullName $conv
-    Remove-Item -Recurse -Force "$tools\tmpc", "$tools\conv.zip"
+    if (Test-Path "$tools\tmpc") { Remove-Item -Recurse -Force "$tools\tmpc" -ErrorAction SilentlyContinue }
+    # solo lo necesario (los .py de la raíz y gguf-py): el repositorio entero tiene rutas demasiado largas para Windows
+    Add-Type -AssemblyName System.IO.Compression.FileSystem
+    $zip = [System.IO.Compression.ZipFile]::OpenRead("$tools\conv.zip")
+    try {
+        foreach ($e in $zip.Entries) {
+            $rel = $e.FullName.Substring($e.FullName.IndexOf("/") + 1)
+            if (-not $rel -or $rel.EndsWith("/")) { continue }
+            if (($rel -notmatch "/" -and $rel.EndsWith(".py")) -or $rel.StartsWith("gguf-py/")) {
+                $dest = Join-Path $conv ($rel -replace "/", "\")
+                New-Item -ItemType Directory -Force (Split-Path $dest) | Out-Null
+                [System.IO.Compression.ZipFileExtensions]::ExtractToFile($e, $dest, $true)
+            }
+        }
+    } finally { $zip.Dispose() }
+    Remove-Item -Force "$tools\conv.zip"
+    if (-not (Test-Path "$conv\convert_hf_to_gguf.py")) { throw "El zip de llama.cpp no trae convert_hf_to_gguf.py" }
 }
 Run $py -m pip install --quiet -e "$conv\gguf-py" sentencepiece protobuf
 
