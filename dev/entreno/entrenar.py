@@ -88,7 +88,8 @@ def main() -> int:
     ap.add_argument("--lr", type=float, default=1e-4)
     ap.add_argument("--rank", type=int, default=16)
     ap.add_argument("--accum", type=int, default=8, help="ejemplos por paso de optimización")
-    ap.add_argument("--max-len", type=int, default=3600, help="ejemplos más largos se descartan (8 GB: ~3600)")
+    ap.add_argument("--max-len", type=int, default=3000,
+                    help="ejemplos más largos se descartan (8 GB en Windows: 3000; con 3600 alguno se desbordaba a la RAM)")
     ap.add_argument("--max-steps", type=int, default=0)
     ap.add_argument("--limit", type=int, default=0)
     ap.add_argument("--no-4bit", action="store_true")
@@ -214,6 +215,9 @@ def main() -> int:
             loss = loss_of(data[order.pop()]) / a.accum
             loss.backward()
             acc += loss.item()
+            del loss
+            if cuda:
+                torch.cuda.empty_cache()   # devuelve lo reservado: sin esto, se acumula y acaba desbordando a la RAM
         if step == 0:
             mem("tras el primer paso (con gradientes)")
         torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)

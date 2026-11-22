@@ -71,9 +71,10 @@ GROUPS = {
     "rutinas": (r"rutina|automatiza|autom[aá]tic|a partir de ahora|de ahora en adelante|desde ahora|cada (d[ií]a|ma[ñn]ana|"
                 r"noche|tarde|semana|hora|vez|lunes|martes|mi[eé]rcoles|jueves|viernes|s[aá]bado|domingo)|todos los (d[ií]as|lunes|"
                 r"martes|mi[eé]rcoles|jueves|viernes|s[aá]bados|domingos)|todas las (ma[ñn]anas|noches|tardes)|siempre que|"
-                r"cuando (encienda|arranque|diga)|al encender|programa(r|me)? (que|para)|diariamente",
+                r"cuando (encienda|arranque|diga)|al encender|programa(r|me)? (que|para)|diariamente|de lunes a viernes|entre semana|"
+                r"los fines de semana|todas las semanas",
                 ["create_routine", "list_routines", "delete_routine"]),
-    "pantalla": (r"\b(ah[ií]|aqu[ií]|esto|esta|este|eso|esa|ese|pantalla|ventana|bot[oó]n|icono|clic|cl[ií]ca|pulsa|"
+    "pantalla": (r"\b(ah[ií]|aqu[ií]|esto|esta|este|eso|esa|ese|pantalla(?! completa)|ventana|bot[oó]n|icono|clic|cl[ií]ca|pulsa|"
                  r"pincha|marca|selecciona|mira|ves|minimiza|maximiza|cambia a|ve a|tr[aá]e|pon delante|men[uú]|pesta[ñn]a)\b",
                  ["screen_click", "look_at_screen", "focus_window"]),
     "navegador": (r"navegador|pesta[ñn]a|p[aá]gina|web\b|enlace|link|scroll|baja la p|sube la p|desliza|l[eé]e(me)? |"
@@ -82,7 +83,7 @@ GROUPS = {
     "plan": (r"\by (luego|despu[eé]s|tambi[eé]n|adem[aá]s)\b|\bprimero\b|\bdespu[eé]s\b|\by (abre|pon|cierra|busca|haz|m[aá]ndame|"
              r"escribe|baja|sube)\b", ["plan"]),
     "jarvis": (r"voz|habla m[aá]s|ajuste|configura|actualiza|versi[oó]n|habilidad|"
-               r"aprend|sabes de m[ií]|olvida|qui[eé]n eres|c[oó]mo te llamas|estado del (pc|ordenador|sistema)|bater[ií]a|memoria ram",
+               r"aprend|sabes de m[ií]|qui[eé]n eres|c[oó]mo te llamas|estado del (pc|ordenador|sistema)|bater[ií]a|memoria ram",
                ["create_routine", "list_routines", "delete_routine", "voices", "settings", "check_updates", "create_skill",
                 "undo_skill", "about", "what_you_know", "forget", "system_status"]),
 }
@@ -94,7 +95,11 @@ def select(text: str, recent: list[str] | None = None) -> list[str]:
     names = list(CORE)
     low = (text or "").lower()
     recent = set(recent or [])
-    for kw, group in GROUPS.values():
+    # crear/gestionar una rutina: solo sus herramientas (lo que haga la rutina se ejecutará después, a su hora)
+    routine = bool(_re.search(GROUPS["rutinas"][0], low))
+    for gname, (kw, group) in GROUPS.items():
+        if routine and gname not in ("rutinas", "recordatorios"):
+            continue
         if _re.search(kw, low) or recent.intersection(group):
             names += group
     names += [n for n, t in REGISTRY.items() if not t.core]       # habilidades propias
