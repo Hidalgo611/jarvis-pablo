@@ -516,7 +516,7 @@ class Brain:
         spoken_any = False
         final = ""
         seen_calls: dict[str, int] = {}
-        honesty_checked = False
+        honesty_checked = retried = False
         buf = {"t": "", "think": False, "hold": bool(ACTION_RE.search(user_text))}
 
         _say = say
@@ -590,6 +590,18 @@ class Brain:
                         messages.append({"role": "assistant", "content": content})
                         messages.append({"role": "user", "content": "(Sistema: NO has ejecutado ninguna herramienta, así que "
                                          "no has hecho nada. Llama ahora a la herramienta adecuada para lo que se pidió.)"})
+                        continue
+                    hint = re.search(r"usa (?:la herramienta )?`(\w+)`", last_tool)
+                    if not calls and failed_tool and hint and not retried and hint.group(1) in tools.REGISTRY:
+                        # se equivocó de herramienta y el error dice cuál es la buena: que lo haga ya, sin contestar aún
+                        retried = True
+                        tname = hint.group(1)
+                        if self._run_tools is not None and tname not in self._run_tools:
+                            self._run_tools.append(tname)     # que se le ofrezca en la siguiente vuelta
+                        log.info("reintento con %s tras: %s", tname, last_tool[:120])
+                        messages.append({"role": "assistant", "content": content})
+                        messages.append({"role": "user", "content": f"(Sistema: todavía NO está hecho. Llama ahora a `{tname}` "
+                                         f"para hacer lo que pidió; no le contestes hasta tener el resultado.)"})
                         continue
                     if not calls and failed_tool and not honesty_checked and CLAIM_RE.search(content):
                         # dice que está hecho, pero la herramienta ha dicho que NO: no se dice y se le corrige
