@@ -64,7 +64,13 @@ Start-Sleep 3
 # 6) Datos para el portátil ---------------------------------------------------------------
 $key = & $py "$PSScriptRoot\jarvis_server.py" --clave
 $ts = (Get-Command tailscale -ErrorAction SilentlyContinue)
-$name = if ($ts) { (tailscale status --json | ConvertFrom-Json).Self.DNSName.TrimEnd(".") } else { "<nombre-de-este-PC-en-Tailscale>" }
+$name = ""
+if ($ts) { try { $name = "$((tailscale status --json | ConvertFrom-Json).Self.DNSName)".TrimEnd(".") } catch { } }
+if (-not $name) {
+    $name = "<nombre-de-este-PC-en-Tailscale>"
+    Write-Host "`nTailscale no tiene la sesión iniciada en este PC: abre la app de Tailscale, entra con tu cuenta y mira" -ForegroundColor Yellow
+    Write-Host "el nombre (o la IP 100.x.x.x) con:  tailscale status" -ForegroundColor Yellow
+}
 Write-Host "`nListo. En el portátil de Pablo, Ajustes de Jarvis:" -ForegroundColor Green
 Write-Host "  Servidor de IA:     http://$($name):11500"
 Write-Host "  Clave del servidor: $key"
