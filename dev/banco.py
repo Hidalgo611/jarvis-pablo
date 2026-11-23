@@ -65,6 +65,14 @@ def fake(name: str, args: dict) -> str:
         if act == "fullscreen":
             return "Vídeo en pantalla completa."
         return "Hecho."
+    if name == "window":
+        act, names = a.get("action", ""), str(a.get("names", "")).lower()
+        if act == "minimize" and "administrador" in names:
+            ok = [x for x in ("Configuración",) if "ajuste" in names or "config" in names]
+            return ((f"Hecho, minimizada(s): {', '.join(ok)}. " if ok else "") +
+                    "ERROR: NO se ha podido (minimize) con: «Administrador de tareas» (Windows no lo permite: se ejecuta "
+                    "como administrador). Díselo tal cual, sin decir que está hecho.")
+        return f"Hecho, {act}: {a.get('names', '')}."
     if name == "open_app":
         return f"Abierto: {a.get('name', '')}."
     if name == "close_app":
@@ -91,6 +99,11 @@ _orig = tools.execute
 
 
 def execute(name, args):
+    bad = tools.validate(name, {k: v for k, v in (args or {}).items() if k in tools.REGISTRY[name].params}) \
+        if name in tools.REGISTRY else f"ERROR: la herramienta '{name}' no existe."
+    if bad:
+        CALLS.append((name, args, bad))
+        return bad
     if name in REAL:
         out = _orig(name, args)
     else:
@@ -107,6 +120,15 @@ _b.tools.execute = execute
 # ---------------------------------------------------------------- escenarios
 # expect: lista de (herramienta, {arg: valor | "re:regex"}) que DEBEN aparecer; none=True → no debe usar acciones
 S = [
+    {"name": "ventanas_minimizar", "turns": [
+        {"say": "Pon YouTube en principal y minimiza el administrador de tareas y los ajustes",
+         "expect": [("window", {"action": "focus", "names": "re:(?i)youtube"}), ("window", {"action": "minimize"})],
+         "forbid": [r"(?i)cerrad", r"(?i)^(listo|hecho)[.,!]?$"], "require": [r"(?i)administrador"]},
+    ]},
+    {"name": "ventanas_delante", "turns": [
+        {"say": "Abre Spotify", "expect": [("open_app", {"name": "re:(?i)spotify"})]},
+        {"say": "Ponme Chrome delante", "expect": [("window", {"action": "focus", "names": "re:(?i)chrome"})]},
+    ]},
     {"name": "youtube_pantalla_completa", "turns": [
         {"say": "Ponme un vídeo de Ibai en YouTube", "expect": [("youtube", {"action": "re:play|search"})]},
         {"say": "Ponlo en pantalla completa", "expect": [("youtube", {"action": "fullscreen"})]},

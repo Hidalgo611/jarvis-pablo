@@ -76,7 +76,10 @@ GROUPS = {
                 ["create_routine", "list_routines", "delete_routine"]),
     "pantalla": (r"\b(ah[ií]|aqu[ií]|esto|esta|este|eso|esa|ese|pantalla(?! completa)|ventana|bot[oó]n|icono|clic|cl[ií]ca|pulsa|"
                  r"pincha|marca|selecciona|mira|ves|minimiza|maximiza|cambia a|ve a|tr[aá]e|pon delante|men[uú]|pesta[ñn]a)\b",
-                 ["screen_click", "look_at_screen", "focus_window"]),
+                 ["screen_click", "look_at_screen", "window"]),
+    "ventanas": (r"ventana|minimiz|maximiz|restaur|delante|al frente|primer plano|en principal|de principal|encima|"
+                 r"detr[aá]s|esconde|quita de en medio|administrador de tareas|ajustes|configuraci[oó]n",
+                 ["window"]),
     "navegador": (r"navegador|pesta[ñn]a|p[aá]gina|web\b|enlace|link|scroll|baja la p|sube la p|desliza|l[eé]e(me)? |"
                   r"escribe en|rellena|formulario|google|zoom|atr[aá]s|adelante|recarga|inicia sesi[oó]n|chrome|edge",
                   ["browser"]),
@@ -127,6 +130,28 @@ def label_for(name: str, args: dict) -> str:
     return name.replace("_", " ").capitalize()
 
 
+HINTS = {("system", "minimize"): "Para minimizar, maximizar o cerrar ventanas usa la herramienta `window`.",
+         ("system", "maximize"): "Para ventanas usa la herramienta `window`.",
+         ("system", "close"): "Para cerrar ventanas usa `window` (close) o `close_app`.",
+         ("system", "focus"): "Para traer una ventana al frente usa `window` (focus)."}
+
+
+def validate(name: str, args: dict) -> str | None:
+    """Opciones que no existen (p. ej. system action=minimize) → ERROR con las válidas, en vez de «Hecho» falso."""
+    t = REGISTRY.get(name)
+    if not t:
+        return f"ERROR: la herramienta '{name}' no existe."
+    missing = [r for r in t.required if r not in (args or {}) or args.get(r) in (None, "")]
+    if missing:
+        return f"ERROR: falta {', '.join(missing)} para {name}. No está hecho."
+    for k, v in (args or {}).items():
+        enum = (t.params.get(k) or {}).get("enum")
+        if enum and isinstance(v, str) and v not in enum:
+            hint = HINTS.get((name, v), "")
+            return (f"ERROR: {name} no tiene la opción {k}='{v}' (válidas: {', '.join(enum)}). No está hecho. {hint}").strip()
+    return None
+
+
 def execute(name: str, args: dict) -> str:
     t = REGISTRY.get(name)
     if not t:
@@ -137,6 +162,10 @@ def execute(name: str, args: dict) -> str:
         except Exception:
             args = {}
     args = {k: v for k, v in (args or {}).items() if k in t.params}
+    bad = validate(name, args)
+    if bad:
+        log.info("tool %s rechazada: %s", name, bad)
+        return bad
     t0 = time.time()
     try:
         out = t.fn(**args)

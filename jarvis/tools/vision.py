@@ -124,6 +124,7 @@ def locate(target: str, verify: bool = True) -> tuple[int, int] | None:
 
 def focus(name: str) -> str | None:
     """Trae al frente la ventana cuyo título o programa se parezca a `name`."""
+    name = ALIASES.get(name.lower().strip(), name)
     import difflib
     import ctypes
     import psutil
@@ -162,6 +163,101 @@ def focus(name: str) -> str | None:
         ctypes.windll.user32.keybd_event(0x12, 0, 2, 0)
     time.sleep(0.6)
     return title
+
+
+ALIASES = {"ajustes": "configuración", "configuracion": "configuración", "settings": "configuración",
+           "administrador de tareas": "administrador de tareas", "task manager": "administrador de tareas",
+           "explorador": "explorador de archivos", "navegador": "chrome", "youtube": "youtube", "el navegador": "chrome"}
+SKIP_PROCS = {"jarvis.exe", "python.exe", "pythonw.exe", "textinputhost.exe", "shellexperiencehost.exe",
+              "searchhost.exe", "startmenuexperiencehost.exe", "lockapp.exe"}
+
+
+def find_windows(name: str, min_score: float = 0.6) -> list:
+    """Ventanas de nivel superior (hwnd, título, proceso) que se parecen a `name`, la mejor primero."""
+    import difflib
+    import psutil
+    import win32gui
+    import win32process
+    n = ALIASES.get(name.lower().strip(), name.lower().strip())
+    found = []
+
+    def cb(h, _):
+        if not win32gui.IsWindowVisible(h):
+            return
+        title = win32gui.GetWindowText(h)
+        if not title or title in ("Program Manager",):
+            return
+        try:
+            proc = psutil.Process(win32process.GetWindowThreadProcessId(h)[1]).name().lower()
+        except Exception:
+            proc = ""
+        if proc in SKIP_PROCS:
+            return
+        t = title.lower()
+        sc = max(difflib.SequenceMatcher(None, n, t).ratio(), difflib.SequenceMatcher(None, n, proc.removesuffix(".exe")).ratio())
+        if n in t or (n and n in proc):
+            sc += 1
+        if sc >= min_score:
+            found.append((sc, h, title, proc))
+    win32gui.EnumWindows(cb, None)
+    found.sort(key=lambda x: -x[0])
+    return [(h, title, proc) for _, h, title, proc in found]
+
+
+@tool("window", "Gestiona ventanas abiertas: traer al frente (focus), minimizar, maximizar, restaurar o cerrar. "
+      "Para varias, sepáralas con comas en `names` (p. ej. «administrador de tareas, ajustes»).",
+      {"action": S("Qué hacer", ["focus", "minimize", "maximize", "restore", "close"]),
+       "names": S("Ventana(s) por programa o título, separadas por comas")}, ["action", "names"],
+      label=lambda a: {"focus": "Trayendo al frente", "minimize": "Minimizando", "maximize": "Maximizando",
+                       "restore": "Restaurando", "close": "Cerrando"}.get(a.get("action"), "Ventanas") + f" {a.get('names', '')}")
+def window(action: str, names: str) -> str:
+    """Hace la acción y COMPRUEBA el resultado: lo que no se ha podido hacer se dice tal cual."""
+    import win32con
+    import win32gui
+    done, failed = [], []
+    for name in [x.strip() for x in str(names).replace(" y ", ",").split(",") if x.strip()]:
+        wins = find_windows(name)
+        if not wins:
+            failed.append(f"«{name}» (no hay ninguna ventana abierta así)")
+            continue
+        h, title, proc = wins[0]
+        try:
+            if action == "focus":
+                ok = bool(focus(name))
+            elif action == "minimize":
+                win32gui.ShowWindow(h, win32con.SW_MINIMIZE)
+                time.sleep(0.3)
+                ok = bool(win32gui.IsIconic(h))
+            elif action == "maximize":
+                win32gui.ShowWindow(h, win32con.SW_MAXIMIZE)
+                time.sleep(0.3)
+                ok = bool(win32gui.GetWindowPlacement(h)[1] == win32con.SW_SHOWMAXIMIZED)
+            elif action == "restore":
+                win32gui.ShowWindow(h, win32con.SW_RESTORE)
+                time.sleep(0.3)
+                ok = not win32gui.IsIconic(h)
+            elif action == "close":
+                win32gui.PostMessage(h, win32con.WM_CLOSE, 0, 0)
+                time.sleep(0.8)
+                ok = not win32gui.IsWindow(h)
+            else:
+                return "ERROR: acción desconocida."
+        except Exception as e:
+            ok = False
+            log.warning("ventana %s %s: %s", action, title, e)
+        if ok:
+            done.append(title[:60])
+        else:
+            why = " (Windows no lo permite: se ejecuta como administrador)" if proc == "taskmgr.exe" else ""
+            failed.append(f"«{title[:60]}»{why}")
+    verbo = {"focus": "al frente", "minimize": "minimizada(s)", "maximize": "maximizada(s)", "restore": "restaurada(s)",
+             "close": "cerrada(s)"}.get(action, action)
+    out = []
+    if done:
+        out.append(f"Hecho, {verbo}: " + "; ".join(done) + ".")
+    if failed:
+        out.append(f"ERROR: NO se ha podido ({action}) con: " + "; ".join(failed) + ". Díselo tal cual, sin decir que está hecho.")
+    return " ".join(out)
 
 
 @tool("focus_window", "Trae al frente una ventana abierta (por su título o programa: 'calculadora', 'Spotify', 'Word').",

@@ -187,7 +187,8 @@ TOOL_RULES = {
     "daily_briefing": "- «¿Qué tengo hoy?», «resumen del día», «buenos días» → `daily_briefing` y cuéntalo en 3-5 frases naturales.",
     "notifications": "- Notificaciones: di de quién son, pero NO leas mensajes privados salvo que te lo pida («léemelo») → `notifications` con read_content=true.",
     "settings": "- Si te dice su ciudad, guárdala con `settings` (key=city) además de `remember`.",
-    "screen_click": "- PANTALLA: si su mensaje trae una captura, es su pantalla ahora (el círculo rojo «RATÓN» es el puntero); úsala para entender «esto», «ahí», «ese botón». Para pulsar algo usa `screen_click` describiendo el elemento como se ve (con window=programa si lo sabes). Lo que ya está abierto se trae con `focus_window`, no pulsando la barra de tareas. Sin captura, si necesitas ver algo: `look_at_screen`.",
+    "window": "- VENTANAS: «pon X delante / en principal» → `window` focus; «minimiza X» → minimize (NO es cerrar); «cierra la ventana de X» → close. Varias a la vez: names separadas por comas. Di SOLO lo que la herramienta confirma; si responde ERROR, cuéntale qué no se pudo.",
+    "screen_click": "- PANTALLA: si su mensaje trae una captura, es su pantalla ahora (el círculo rojo «RATÓN» es el puntero); úsala para entender «esto», «ahí», «ese botón». Para pulsar algo usa `screen_click` describiendo el elemento como se ve (con window=programa si lo sabes). Lo que ya está abierto se trae con `window` (focus), no pulsando la barra de tareas. Sin captura, si necesitas ver algo: `look_at_screen`.",
 }
 
 
@@ -515,6 +516,7 @@ class Brain:
         spoken_any = False
         final = ""
         seen_calls: dict[str, int] = {}
+        honesty_checked = False
         buf = {"t": "", "think": False, "hold": bool(ACTION_RE.search(user_text))}
 
         _say = say
@@ -568,6 +570,10 @@ class Brain:
                 if self.cancel.is_set():
                     break
                 buf["t"] = ""
+                last_tool = next((m["content"] for m in reversed(messages) if m.get("role") == "tool"), "") if step else ""
+                failed_tool = bool(re.match(r"\s*(ERROR|No hay|No encuentro|No veo|No he podido)", last_tool))
+                if failed_tool and not honesty_checked:
+                    buf["hold"] = True          # la última acción falló: no se dice nada hasta comprobar que no miente
                 content, calls = self._stream(messages, on_text)
                 content = re.sub(r"<think>.*?</think>", "", content, flags=re.S)
                 content = re.sub(r"^\s*\[[^\]]{0,400}\]\s*", "", content).strip()
@@ -584,6 +590,14 @@ class Brain:
                         messages.append({"role": "assistant", "content": content})
                         messages.append({"role": "user", "content": "(Sistema: NO has ejecutado ninguna herramienta, así que "
                                          "no has hecho nada. Llama ahora a la herramienta adecuada para lo que se pidió.)"})
+                        continue
+                    if not calls and failed_tool and not honesty_checked and CLAIM_RE.search(content):
+                        # dice que está hecho, pero la herramienta ha dicho que NO: no se dice y se le corrige
+                        honesty_checked = True
+                        log.warning("éxito inventado tras un fallo evitado: %r", content[:120])
+                        messages.append({"role": "assistant", "content": content})
+                        messages.append({"role": "user", "content": f"(Sistema: eso NO es verdad. La herramienta ha "
+                                         f"respondido: «{last_tool[:300]}». Dile en una frase qué no se ha podido hacer.)"})
                         continue
                 rest = re.sub(r"<think>.*?</think>", "", buf["t"], flags=re.S).strip()
                 if rest and "<think>" not in rest and not TOOL_TAG.search(rest):

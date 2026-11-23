@@ -107,6 +107,18 @@ class Browser:
             page.bring_to_front()
         except Exception:
             pass
+        # bring_to_front solo cambia de pestaña: la ventana del navegador también tiene que ponerse delante
+        try:
+            title = page.title()
+            cdp = self.ctx.new_cdp_session(page)
+            wid = cdp.send("Browser.getWindowForTarget")["windowId"]
+            if cdp.send("Browser.getWindowBounds", {"windowId": wid})["bounds"].get("windowState") == "minimized":
+                cdp.send("Browser.setWindowBounds", {"windowId": wid, "bounds": {"windowState": "normal"}})
+            from .vision import focus
+            if title:
+                focus(title)
+        except Exception:
+            log.debug("traer navegador al frente", exc_info=True)
 
     def _consent(self, page, wait: float = 0.0) -> bool:
         """Cierra avisos de cookies de Google/YouTube (prefiere «Rechazar todo»). Devuelve True si cerró alguno."""
@@ -218,7 +230,23 @@ class Browser:
 
     def _open_url(self, url: str) -> str:
         page = self._goto(url)
-        return f"Abierta {page.url} — título: {page.title()}"
+        self._front(page)
+        out = f"Abierta {page.url} — título: {page.title()}"
+        return out + self._login_hint(page)
+
+    def _login_hint(self, page) -> str:
+        """El navegador de Jarvis tiene su propia sesión (Chrome no deja controlar el perfil normal). Si en
+        YouTube/Google no ha iniciado sesión, se le dice UNA vez que puede hacerlo ahí y quedará guardada."""
+        try:
+            if not re.search(r"youtube\.com|google\.", page.url) or memory.get("login_hint_done"):
+                return ""
+            if page.locator('a[href*="ServiceLogin"], a[aria-label="Iniciar sesión"], a[aria-label="Sign in"]').count():
+                memory.set("login_hint_done", True)
+                return ("\n(Nota: en mi navegador no ha iniciado sesión en Google/YouTube. Díselo en una frase: si inicia "
+                        "sesión una vez en esta ventana, se queda guardada y verá sus recomendaciones y suscripciones.)")
+        except Exception:
+            pass
+        return ""
 
     def _new_tab(self, url: str | None) -> str:
         self._ensure()
