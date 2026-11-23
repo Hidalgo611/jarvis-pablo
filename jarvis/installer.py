@@ -178,11 +178,33 @@ def _h() -> dict:
     return headers()
 
 
+BASE_MODEL = "qwen3.5:4b"   # el oficial: si el modelo entrenado (jarvis-pablo) no está, se usa este
+
+
+def _has(m: str, have: set) -> bool:
+    return m in have or f"{m}:latest" in have
+
+
+def _prefer_trained(have: set) -> None:
+    """El modelo entrenado (p. ej. jarvis-pablo) solo existe en el PC donde se creó: no se puede descargar.
+    Si el servidor no lo tiene, Jarvis usa el oficial y vuelve al entrenado en cuanto esté disponible."""
+    pref = settings.get("model_preferred") or ""
+    if pref and _has(pref, have) and settings["model"] != pref:
+        log.info("vuelve a estar disponible %s: lo uso", pref)
+        settings.set("model", pref)
+    m = settings["model"]
+    if not _has(m, have) and m != BASE_MODEL and have:
+        log.warning("el servidor no tiene %s; uso %s hasta que esté", m, BASE_MODEL)
+        settings.set("model_preferred", m)
+        settings.set("model", BASE_MODEL)
+
+
 def ensure_llm() -> None:
     from .llm import is_remote
     if is_remote():
         # el cerebro vive en el PC-servidor: allí se descargan y gestionan los modelos (server/README)
         settings.set("model_chosen", True)
+        _prefer_trained(installed_models())
         if settings["model"] not in installed_models():
             log.warning("el servidor remoto no tiene %s; uso lo que tenga", settings["model"])
         return
@@ -190,9 +212,20 @@ def ensure_llm() -> None:
     if not settings.get("model_chosen"):
         settings.set("model", pick_model())
         settings.set("model_chosen", True)
+    _prefer_trained(have)
     m = settings["model"]
-    if m not in have and f"{m}:latest" not in have:
-        pull(m, "cerebro (modelo de lenguaje)")
+    if not _has(m, have):
+        try:
+            pull(m, "cerebro (modelo de lenguaje)")
+        except Exception:
+            if m == BASE_MODEL:
+                raise
+            log.exception("no se puede descargar %s; uso %s", m, BASE_MODEL)
+            settings.set("model_preferred", m)
+            settings.set("model", BASE_MODEL)
+            m = BASE_MODEL
+            if not _has(m, have):
+                pull(m, "cerebro (modelo de lenguaje)")
     # borra modelos que Jarvis ya no usa (solo los que descargó él) para liberar disco
     for old in settings.get("cleanup_models") or []:
         if old != m:
