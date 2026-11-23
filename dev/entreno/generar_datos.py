@@ -435,12 +435,60 @@ def g_multi():
                                                           ("say", f"Spotify abierto y volumen al {v} %.")])]
 
 
+VENTANAS = ["Spotify", "Discord", "Chrome", "YouTube", "Word", "el administrador de tareas", "los ajustes", "WhatsApp",
+            "Steam", "el explorador de archivos"]
+
+
+def g_ventanas():
+    a, b = R.sample(VENTANAS, 2)
+    act, u, say = pick([
+        ("focus", f"pon {a} delante", f"{a[:1].upper() + a[1:]} delante."),
+        ("focus", f"ponme {a} en principal", "Ahí lo tienes."),
+        ("focus", f"trae {a} al frente", "Hecho."),
+        ("minimize", f"minimiza {a}", "Minimizado."),
+        ("minimize", f"minimiza {a} y {b}", "Minimizados los dos."),
+        ("maximize", f"maximiza {a}", "Maximizado."),
+        ("close", f"cierra la ventana de {a}", "Cerrada.")])
+    names = f"{a}, {b}" if " y " in u else a
+    res = {"focus": "al frente", "minimize": "minimizada(s)", "maximize": "maximizada(s)", "close": "cerrada(s)"}[act]
+    return [(u, "", [("call", [call("window", action=act, names=names)], [f"Hecho, {res}: {names}."]), ("say", say)])]
+
+
+def g_ventana_falla():
+    """La herramienta dice que NO: se cuenta tal cual (nada de «hecho»)."""
+    u = pick(["pon youtube en principal y minimiza el administrador de tareas y los ajustes",
+              "minimiza el administrador de tareas y los ajustes", "quita de en medio el administrador de tareas"])
+    steps = []
+    if "youtube" in u:
+        steps.append(("call", [call("window", action="focus", names="YouTube")], ["Hecho, al frente: YouTube - Google Chrome."]))
+    names = "administrador de tareas, ajustes" if "ajustes" in u else "administrador de tareas"
+    ok = "Hecho, minimizada(s): Configuración. " if "ajustes" in u else ""
+    steps.append(("call", [call("window", action="minimize", names=names)],
+                  [ok + "ERROR: NO se ha podido (minimize) con: «Administrador de tareas» (Windows no lo permite: se ejecuta "
+                        "como administrador). Díselo tal cual, sin decir que está hecho."]))
+    steps.append(("say", ("YouTube delante y los ajustes minimizados. " if "youtube" in u else "Ajustes minimizados. " if ok else "")
+                  + "El administrador de tareas no me deja: Windows lo protege porque va con permisos de administrador."))
+    return [(u, "", steps)]
+
+
+def g_opcion_invalida():
+    """Si se equivoca de herramienta y recibe ERROR, rectifica con la correcta."""
+    a = pick(["el administrador de tareas", "Discord", "los ajustes"])
+    return [(f"minimiza {a}", "", [
+        ("call", [call("system", action="minimize")],
+         ["ERROR: system no tiene la opción action='minimize' (válidas: volume_set, volume_up, …). No está hecho. "
+          "Para minimizar, maximizar o cerrar ventanas usa la herramienta `window`."]),
+        ("call", [call("window", action="minimize", names=a)], [f"Hecho, minimizada(s): {a}."]),
+        ("say", "Minimizado.")])]
+
+
 GENS = [(g_volumen, 8), (g_volumen_rel, 5), (g_silencio, 2), (g_media, 3), (g_brillo, 2), (g_delicado, 2), (g_abrir_app, 7),
         (g_abrir_cerrar, 4), (g_app_inexistente, 2), (g_web, 5), (g_yt_play, 8), (g_yt_fullscreen, 5), (g_yt_buscar, 3),
         (g_tiempo, 5), (g_noticias, 3), (g_informe, 2), (g_dia, 2), (g_recordatorio, 5), (g_alarma_hora, 2), (g_rutina, 7),
         (g_rutina_sin_hora, 2), (g_rutina_frase, 3), (g_rutinas_lista, 2), (g_rutina_borrar, 2), (g_recordar_dato, 5),
         (g_corregir_dato, 3), (g_olvidar, 3), (g_nombre, 4), (g_recuerdo, 6), (g_charla, 14), (g_charla_seguida, 6),
-        (g_interrumpido, 4), (g_corrige_accion, 4), (g_falla_herramienta, 2), (g_multi, 2)]
+        (g_interrumpido, 4), (g_corrige_accion, 4), (g_falla_herramienta, 2), (g_multi, 2),
+        (g_ventanas, 6), (g_ventana_falla, 3), (g_opcion_invalida, 2)]
 
 
 # ---------------------------------------------------------------- montaje en formato de chat
