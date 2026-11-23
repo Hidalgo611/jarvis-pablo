@@ -248,7 +248,7 @@ class Jarvis(QObject):
         from . import updater as upd
         upd.cleanup_old()
         need_setup = not installer.models_ready() or not installer.ollama_up() or \
-            settings["model"] not in installer.installed_models()
+            not installer._has(settings["model"], installer.installed_models())
         if need_setup:
             bus.mode.emit("setup")
             bus.state.emit("setup")
@@ -266,7 +266,22 @@ class Jarvis(QObject):
         bus.progress.emit(-2, "")
         threading.Thread(target=installer.ensure_vision_background, daemon=True).start()
         try:
-            self._start_services(first_run=need_setup)
+            try:
+                self._start_services(first_run=need_setup)
+            except RuntimeError as e:
+                # un modelo dañado (p. ej. el oído a medio descargar): se repara solo y se reintenta una vez
+                if "load model" not in str(e).lower():
+                    raise
+                log.exception("modelo que no carga")
+                bus.mode.emit("setup")
+                bus.state.emit("setup")
+                bus.progress.emit(-1, "Reparando un módulo dañado…")
+                fixed = installer.repair_model(str(e))
+                if not fixed:
+                    raise
+                bus.progress.emit(-2, "")
+                self.speaker = None
+                self._start_services(first_run=True)
         except Exception as e:
             log.exception("arranque de servicios")
             bus.state.emit("error")

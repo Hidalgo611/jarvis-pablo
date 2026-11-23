@@ -49,6 +49,9 @@ def _download(url: str, dest: Path, label: str) -> None:
                     t0 = time.time()
                     bus.progress.emit(done / total if total else -1,
                                       f"Descargando {label}  {done / 2**20:.0f} / {total / 2**20:.0f} MB" if total else f"Descargando {label}")
+    if total and done != total:          # descarga cortada: no se da por buena (así se quedó dañado el oído)
+        tmp.unlink(missing_ok=True)
+        raise RuntimeError(f"La descarga de {label} se ha cortado ({done} de {total} bytes). Vuelve a intentarlo.")
     os.replace(tmp, dest)
 
 
@@ -75,6 +78,24 @@ def ensure_models() -> None:
     for chk, url, dest, kind, label in ASSETS:
         if not chk.exists():
             _fetch(url, dest, kind, label)
+
+
+def repair_model(error_text: str) -> str | None:
+    """Un modelo que no carga («Load model from …\\encoder.int8.onnx failed: Protobuf parsing failed») está dañado
+    (descarga o descompresión a medias): se borra y se vuelve a descargar. Devuelve qué se ha reparado."""
+    import shutil
+    low = error_text.replace("/", "\\").lower()
+    for chk, url, dest, kind, label in ASSETS:
+        folder = chk.parent if kind == "tar" else chk
+        if str(folder).replace("/", "\\").lower() in low or chk.name.lower() in low and folder.name.lower() in low:
+            log.warning("modelo dañado: %s → se vuelve a descargar", folder)
+            if folder.is_dir():
+                shutil.rmtree(folder, ignore_errors=True)
+            else:
+                folder.unlink(missing_ok=True)
+            _fetch(url, dest, kind, label)
+            return label
+    return None
 
 
 # ------------------------------------------------------------- Ollama
@@ -211,7 +232,7 @@ def ensure_llm() -> None:
         # el cerebro vive en el PC-servidor: allí se descargan y gestionan los modelos (server/README)
         settings.set("model_chosen", True)
         _prefer_trained(installed_models())
-        if settings["model"] not in installed_models():
+        if not _has(settings["model"], installed_models()):
             log.warning("el servidor remoto no tiene %s; uso lo que tenga", settings["model"])
         return
     have = installed_models()
