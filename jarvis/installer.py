@@ -210,8 +210,10 @@ def ensure_llm() -> None:
         return
     have = installed_models()
     if not settings.get("model_chosen"):
-        settings.set("model", pick_model())
         settings.set("model_chosen", True)
+        if not _has(settings["model"], have):   # sin el modelo entrenado aquí: el oficial que quepa en la gráfica
+            settings.set("model_preferred", settings["model"])
+            settings.set("model", pick_model())
     _prefer_trained(have)
     m = settings["model"]
     if not _has(m, have):

@@ -1,4 +1,4 @@
-# Instala el Jarvis Server en ESTE PC (el que hace de cerebro para el portátil de Pablo).
+﻿# Instala el Jarvis Server en ESTE PC (el que hace de cerebro para el portátil de Pablo).
 # Ejecutar en PowerShell como administrador:   powershell -ExecutionPolicy Bypass -File .\instalar_servidor.ps1
 $ErrorActionPreference = "Stop"
 Set-Location $PSScriptRoot
@@ -33,8 +33,11 @@ $env:OLLAMA_FLASH_ATTENTION = "1"; $env:OLLAMA_KV_CACHE_TYPE = "q8_0"; $env:OLLA
 Start-Process "ollama" -ArgumentList "serve" -WindowStyle Hidden
 Start-Sleep 4
 $cfg = Get-Content .\jarvis_server.json -ErrorAction SilentlyContinue | ConvertFrom-Json
-$model = if ($cfg -and $cfg.model) { $cfg.model } else { "qwen3.5:4b" }
-ollama pull $model
+# el oficial siempre (respaldo y pieza de visión); jarvis-pablo no se descarga: se crea con dev\entreno
+ollama pull qwen3.5:4b
+if (-not ((ollama list) -match "^jarvis-pablo")) {
+    Write-Host "  Aún no existe el modelo entrenado jarvis-pablo: Jarvis usará qwen3.5:4b hasta que lo crees (dev\entreno\LEEME.md)" -ForegroundColor Yellow
+}
 
 # 3) Energía: no suspender nunca, pantallas fuera a los 10 min ------------------------------
 Paso "Energía: el PC no se suspende (las pantallas sí se apagan) para que Jarvis funcione de noche"

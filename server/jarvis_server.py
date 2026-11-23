@@ -41,7 +41,7 @@ DEFAULTS = {
     "listen": "0.0.0.0",              # el firewall (instalar_servidor.ps1) solo deja entrar desde Tailscale
     "ollama": "http://127.0.0.1:11434",
     "key": "",                        # se genera sola la primera vez
-    "model": "qwen3.5:4b",            # modelo principal (para precargarlo al acabar de jugar)
+    "model": "jarvis-pablo",          # modelo principal (para precargarlo al acabar de jugar)
     "gaming_mode": "cpu",             # cpu | cloud | pause
     "cpu_threads": 4,                 # hilos de CPU para la IA mientras juegas (deja el resto al juego)
     "cloud_model": "",                # modelo «-cloud» de Ollama para gaming_mode=cloud (requiere `ollama signin`)
@@ -82,6 +82,8 @@ def load_config() -> dict:
             cfg["night"] = night
         except Exception:
             log.exception("jarvis_server.json corrupto: uso valores por defecto")
+    if cfg.get("model") == "qwen3.5:4b":        # configuraciones antiguas: ahora el principal es el entrenado
+        cfg["model"] = DEFAULTS["model"]
     if not cfg.get("key"):
         cfg["key"] = secrets.token_urlsafe(18)
     CONFIG_PATH.write_text(json.dumps(cfg, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -123,8 +125,17 @@ def unload_all() -> None:
             log.exception("descargar %s", m)
 
 
+def installed() -> set:
+    try:
+        return {m.get("name", "").removesuffix(":latest") for m in ollama("GET", "/api/tags").get("models", [])}
+    except Exception:
+        return set()
+
+
 def preload_gpu() -> None:
     m = STATE["last_model"] or CFG["model"]
+    if m.removesuffix(":latest") not in installed():
+        m = "qwen3.5:4b"
     try:
         ollama("POST", "/api/generate", {"model": m, "keep_alive": -1, "prompt": ""}, timeout=180)
         log.info("precargado en la gráfica: %s", m)

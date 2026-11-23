@@ -10,7 +10,7 @@ from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
 APP_NAME = "Jarvis"
-VERSION = "0.4.0"
+VERSION = "0.4.1"
 # Repositorio público de GitHub donde se publican las versiones ("usuario/repo").
 # Vacío = actualizaciones desactivadas.
 UPDATE_REPO = "Hidalgo611/jarvis-pablo"
@@ -38,7 +38,8 @@ DEFAULTS: dict = {
     "address": "Pablo",            # cómo le llama Jarvis
     "assistant_name": "Jarvis",
     "ollama_url": "http://127.0.0.1:11434",
-    "model": "qwen3.5:4b",         # cerebro principal: herramientas + visión; cabe entero en 8 GB de VRAM
+    "model": "jarvis-pablo",       # cerebro: Qwen3.5-4B entrenado para Jarvis (dev/entreno). Si el servidor no lo
+                                   # tiene, se usa qwen3.5:4b y se vuelve a este en cuanto esté (installer.py)
     "vision_model": "",            # vacío = el mismo modelo (si el cerebro no tiene visión, poner uno que sí)
     "num_ctx": 12288,
     "temperature": 0.3,            # más bajo = más centrado (un modelo pequeño se dispersa con temperaturas altas)
@@ -121,7 +122,11 @@ class Settings:
             # 0.4.1: con 0,5 el modelo pequeño era inestable en las pruebas (mismas frases, respuestas distintas)
             if self.data.get("temperature") == 0.5:
                 self.data["temperature"] = DEFAULTS["temperature"]
-        self.data["settings_version"] = 6
+        if v < 7:
+            # 0.4.1: el modelo entrenado gana al oficial en el banco de pruebas (22/22 frente a 20/22)
+            if self.data.get("model") in ("qwen3.5:4b", "qwen3.5:9b"):
+                self.data["model"] = DEFAULTS["model"]
+        self.data["settings_version"] = 7
 
     def __getitem__(self, k):
         return self.data.get(k, DEFAULTS.get(k))
