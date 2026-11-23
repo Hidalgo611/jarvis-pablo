@@ -63,8 +63,19 @@ def _fetch(url: str, dest: Path, kind: str, label: str) -> None:
         arc = Path(td) / "pkg.tar.bz2"
         _download(url, arc, label)
         bus.progress.emit(-1, f"Instalando {label}…")
+        log.info("descomprimiendo %s (puede tardar varios minutos)…", label)
+        t0 = time.time()
         with tarfile.open(arc, "r:bz2") as t:
-            t.extractall(dest, filter="data")
+            members = t.getmembers()            # (recorre el archivo una vez: así se sabe el total para el porcentaje)
+            total = sum(m.size for m in members) or 1
+            done, last = 0, 0.0
+            for m in members:
+                t.extract(m, dest, filter="data")
+                done += m.size
+                if time.time() - last > 0.5:
+                    last = time.time()
+                    bus.progress.emit(done / total, f"Instalando {label}  {done * 100 // total} %")
+        log.info("%s instalado en %.0f s", label, time.time() - t0)
 
 
 ASSETS.append((voices.SUPERTONIC_DIR / "vocoder.int8.onnx", voices.SUPERTONIC_URL, MODELS, "tar", "módulo de voz"))
