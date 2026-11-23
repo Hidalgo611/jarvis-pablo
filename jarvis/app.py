@@ -231,6 +231,8 @@ class Jarvis(QObject):
 
     def _on_failed(self, msg: str) -> None:
         self.tray.showMessage("Jarvis", msg, QSystemTrayIcon.Warning, 15000)
+        if "servidor" in msg.lower() or "no responde" in msg.lower():
+            self._open_settings()        # lo más probable: falta la dirección o la clave del servidor
 
     def quit(self) -> None:
         try:
@@ -263,7 +265,13 @@ class Jarvis(QObject):
             return
         bus.progress.emit(-2, "")
         threading.Thread(target=installer.ensure_vision_background, daemon=True).start()
-        self._start_services(first_run=need_setup)
+        try:
+            self._start_services(first_run=need_setup)
+        except Exception as e:
+            log.exception("arranque de servicios")
+            bus.state.emit("error")
+            self.failed.emit(f"Jarvis no ha podido arrancar del todo ({type(e).__name__}: {e}). "
+                             f"Mira el registro: {LOGS / 'jarvis.log'}")
 
     def _start_services(self, first_run: bool) -> None:
         if self.speaker is not None:
@@ -283,12 +291,14 @@ class Jarvis(QObject):
         self.skills = SkillManager()
         self.updater = Updater()
         assistant.CTX.update(speaker=self.speaker, updater=self.updater, skills=self.skills)
+        log.info("servicios: voz, cerebro y habilidades listos; preparando el oído")
         self.audio = AudioEngine()
         self.audio.on_wake = self._interrupt_and_wake
         self.audio.on_barge = self._is_user_speech
         self.audio.speaker = self.speaker
         self.speaker.on_active = self._on_speaking
         self.audio.start()
+        log.info("servicios: oído en marcha (micro: %s)", settings["mic_device"] if settings["mic_device"] is not None else "predeterminado")
         self.scheduler = Scheduler(self._routine_actions, lambda t: self.events.put(("say", t)))
         self.scheduler.start()
         ActivityWatcher().start()

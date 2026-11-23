@@ -110,7 +110,13 @@ def ensure_ollama() -> None:
         if fb and ollama_up(fb):
             log.warning("servidor remoto %s sin respuesta; arranco con el respaldo %s", url, fb)
             return
-        raise RuntimeError(f"El servidor de IA ({url}) no responde. ¿Está encendido el ordenador servidor?")
+        try:
+            code = requests.get(url + "/api/version", timeout=3, headers=_h()).status_code
+        except Exception:
+            code = 0
+        if code == 401:
+            raise RuntimeError("El servidor de IA rechaza la clave: revisa «Clave del servidor» en los Ajustes.")
+        raise RuntimeError(f"El servidor de IA ({url}) no responde. ¿Está encendido el ordenador servidor y Tailscale conectado?")
     exe = _ollama_exe()
     if not exe:
         inst = Path(tempfile.gettempdir()) / "OllamaSetup.exe"

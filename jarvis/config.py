@@ -10,7 +10,7 @@ from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
 APP_NAME = "Jarvis"
-VERSION = "0.4.1"
+VERSION = "0.4.2"
 # Repositorio público de GitHub donde se publican las versiones ("usuario/repo").
 # Vacío = actualizaciones desactivadas.
 UPDATE_REPO = "Hidalgo611/jarvis-pablo"
@@ -160,3 +160,7 @@ def setup_logging() -> None:
         sh = logging.StreamHandler(sys.stdout)
         sh.setFormatter(fmt)
         root.addHandler(sh)
+    # en el .exe no hay consola: cualquier error no capturado (también en hilos) tiene que quedar en el registro
+    sys.excepthook = lambda t, v, tb: logging.getLogger("crash").error("error no capturado", exc_info=(t, v, tb))
+    threading.excepthook = lambda a: logging.getLogger("crash").error(
+        "error no capturado en el hilo %s", getattr(a.thread, "name", "?"), exc_info=(a.exc_type, a.exc_value, a.exc_traceback))

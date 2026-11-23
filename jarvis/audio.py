@@ -50,7 +50,9 @@ class AudioEngine(threading.Thread):
     def __init__(self) -> None:
         super().__init__(name="audio", daemon=True)
         self.q: "queue.Queue[np.ndarray]" = queue.Queue(maxsize=400)
+        log.info("oído: cargando la activación «Jarvis»…")
         self.wake = WakeWord(MODELS / "wakeword")
+        log.info("oído: cargando el detector de voz…")
         vcfg = so.VadModelConfig()
         vcfg.silero_vad.model = str(MODELS / "silero_vad.onnx")
         vcfg.silero_vad.threshold = 0.5
@@ -60,7 +62,9 @@ class AudioEngine(threading.Thread):
         vcfg.sample_rate = SR
         vcfg.num_threads = 1
         self.vad = so.VoiceActivityDetector(vcfg, buffer_size_in_seconds=60)
+        log.info("oído: cargando el reconocedor de voz…")
         self.asr = Recognizer()
+        log.info("oído: listo")
         self.asr_q: "queue.Queue" = queue.Queue()
         threading.Thread(target=self._asr_worker, name="asr", daemon=True).start()
 
